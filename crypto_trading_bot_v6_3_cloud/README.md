@@ -1,70 +1,53 @@
-# Crypto Trading Zentrale – V6.4 Cloud
+# Crypto Trading Zentrale – V6.5 Cloud
 
-V6.4 ist die 24/7-Cloud-/Handy-Zentrale für die eingefrorenen Paper-Tests aus V5.2 und V6. Sie verändert die bestehenden Regeln und Startzeitpunkte nicht und enthält weiterhin **keine echte Broker-Order-Funktion**.
+V6.5 erweitert die bestehende V6.4.1-Cloud-Zentrale nur bei den Benachrichtigungen. Die eingefrorenen V5.2-/V6-Paper-Tests und das Railway-Volume `/data` bleiben unverändert.
 
-## Neu in V6.4
+## Neu in V6.5
 
-- automatische Paper-Auswertung über den bestehenden Worker (Standard: jede Stunde)
-- Telegram-Benachrichtigungen bei neuen Paper-Trade-Aktionen
-- Telegram-Hinweis, wenn ein Markt-Kandidat neu mindestens 9/10 Quality-Regeln erfüllt
-- Telegram-Hinweis bei Führungswechsel im Paper-Wettkampf
-- tägliche Telegram-Zusammenfassung, standardmäßig ab 20:00 Uhr Europe/Berlin
-- Telegram-Einrichtung direkt im Dashboard: Chat-ID automatisch erkennen und Testnachricht senden
-- persistent gespeicherter Benachrichtigungszustand unter `/data`, sodass keine alten Meldungen nach jedem Redeploy erneut versendet werden
+- **Paper-Trade-Meldungen mit mehr Details**
+  - Kauf/Verkauf, Coin, Preis, Uhrzeit, Grund und Gebühr
+  - bei Verkäufen: realisierter Gewinn/Verlust in Euro
+  - aktueller Kontowert der betroffenen Strategie, sofern verfügbar
+- **getrennte Quality-Alarme**
+  - 🟡 9/10 = Vorwarnung
+  - 🚀 10/10 bzw. READY = stärkerer Alarm
+  - ein Coin kann später erneut alarmieren, wenn er die Schwelle erst verliert und anschließend wieder erreicht
+- **ausführlichere tägliche Telegram-Zusammenfassung**
+  - Rangliste/Kontowerte aller Paper-Strategien
+  - Veränderung seit der letzten Tagesübersicht
+  - Trades und Gebühren seit Start
+  - neue Aktionen und realisiertes G/V seit der letzten Übersicht
+  - Marktphase und Top-3-Markt-Kandidaten
+- Im Dashboard gibt es zwei Komfort-Buttons:
+  - **Tagesübersicht jetzt senden**
+  - **Aktuelles Top-Signal senden**
 
-## Update von V6.3 auf V6.4 in Railway
+## Update der laufenden Railway-App
 
-Das bestehende Railway-Volume mit Mount Path `/data` bleibt kompatibel und darf nicht gelöscht werden. Dadurch bleiben die importierten V5.2-/V6-States, Zwischenstände und Verläufe erhalten.
+Am einfachsten nur die Patch-Dateien aus `telegram_comfort_patch_v6_5.zip` in das **Hauptverzeichnis** deines bestehenden GitHub-Repositories `Crypto-Trading-Cloud` hochladen und vorhandene Dateien ersetzen.
 
-1. V6.4 entpacken.
-2. Den **Inhalt** des entpackten Ordners in das Hauptverzeichnis deines bestehenden GitHub-Repositories hochladen und vorhandene Dateien ersetzen.
-3. Committen. Railway startet anschließend automatisch einen neuen Deploy.
-4. Prüfen, dass das bestehende Volume weiterhin an `/data` gemountet ist.
+Danach `Commit changes`. Railway deployt automatisch neu.
 
-## Telegram einrichten
+**Nicht löschen oder verändern:**
+- Railway-Volume `crypto-trading-cloud-volume`
+- Mount Path `/data`
+- deine bestehenden Telegram-/Passwort-Variablen
 
-1. In Telegram `@BotFather` öffnen.
-2. `/newbot` senden und den Anweisungen folgen.
-3. Den erzeugten Bot-Token kopieren.
-4. In Railway beim Crypto-Trading-Service unter **Variables** hinzufügen:
+Die vorhandene `notification_state.json` wird kompatibel weiterverwendet. Beim ersten V6.5-Lauf wird der neue 9/10-/10/10-Status als Baseline übernommen, damit nach dem Update keine alten Quality-Signale nachträglich gespammt werden.
 
-```text
-TELEGRAM_BOT_TOKEN=<dein Bot-Token>
-```
-
-5. Die Änderung deployen.
-6. Den eigenen neuen Bot in Telegram öffnen, **Start** drücken und z. B. `Hallo` senden.
-7. In V6.4 den Tab **🔔 Benachrichtigungen** öffnen und **Chat-ID automatisch finden & speichern** anklicken.
-8. Anschließend **Testnachricht senden**.
-
-Die Chat-ID wird im persistenten `/data`-Volume gespeichert. Alternativ kann sie als Railway-Variable `TELEGRAM_CHAT_ID` gesetzt werden.
-
-## Optionale Railway-Variablen
+## Optionale Variablen
 
 ```text
-AUTO_UPDATE_MINUTES=60
-AUTO_MARKET_SCAN=1
-WORKER_ENABLED=1
-DATA_DIR=/data
-
 NOTIFY_TRADES=1
 NOTIFY_MARKET_CANDIDATES=1
-NOTIFY_MARKET_MIN_RULES=9
+NOTIFY_QUALITY_9=1
+NOTIFY_QUALITY_10=1
 NOTIFY_LEADER_CHANGE=1
 NOTIFY_DAILY_SUMMARY=1
 DAILY_SUMMARY_HOUR=20
 NOTIFY_TIMEZONE=Europe/Berlin
 ```
 
-`AUTO_UPDATE_MINUTES=60` bedeutet: der Cloud-Worker wertet die Paper-Tests und den Markt-Monitor ungefähr stündlich neu aus. Die höchste sinnvoll unterstützte Aktualisierungsfrequenz für dieses Projekt ist nicht als Hochfrequenz-Trading gedacht; die Strategien selbst basieren ohnehin auf 1h-/6h-Daten.
+Wenn die beiden neuen Variablen `NOTIFY_QUALITY_9` und `NOTIFY_QUALITY_10` nicht gesetzt werden, sind beide standardmäßig **aktiv**.
 
-## Benachrichtigungslogik
-
-Beim ersten Lauf nach dem Upgrade setzt V6.4 einen Baseline-Zustand. Bereits vergangene Trades werden **nicht** rückwirkend als neue Telegram-Alarme versendet. Erst danach neu auftretende Trade-Aktionen oder neu erreichte Markt-Schwellen werden gemeldet.
-
-## Sicherheit
-
-- `TRADING_DASHBOARD_PASSWORD` als Railway-Secret/Variable setzen.
-- `TELEGRAM_BOT_TOKEN` ausschließlich als Railway-Variable speichern, niemals in GitHub committen.
-- Keine Broker-API-Schlüssel in Repository oder ZIP-Dateien ablegen.
-- V6.4 ist weiterhin Paper-Trading/Monitoring und kann keine echten Orders senden.
+V6.5 bleibt reines Paper-Trading/Monitoring und enthält keine echte Order-Ausführung.

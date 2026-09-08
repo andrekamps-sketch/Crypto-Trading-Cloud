@@ -14,10 +14,10 @@ from cloud_core import (
 )
 from monitor import FROZEN_QUALITY
 from notifications import (
-    clear_saved_chat_id, discover_chat_id, notification_log, process_notifications, send_telegram, settings as notification_settings, save_chat_id, validate_chat_id,
+    clear_saved_chat_id, discover_chat_id, notification_log, build_daily_summary, process_notifications, send_telegram, settings as notification_settings, save_chat_id, validate_chat_id,
 )
 
-TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.4.1 Cloud")
+TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.5 Cloud")
 PASSWORD = os.environ.get("TRADING_DASHBOARD_PASSWORD", "")
 
 st.set_page_config(page_title=TITLE, page_icon="☁️", layout="wide")
@@ -212,7 +212,7 @@ with tab2:
 
 with tab3:
     st.subheader("🔔 Telegram-Benachrichtigungen")
-    st.caption("Optional: V6.4 kann dich automatisch bei neuen Paper-Trades, neuen Markt-Kandidaten, Führungswechseln und einmal täglich über Telegram informieren.")
+    st.caption("Optional: V6.5 meldet neue Paper-Trades mit G/V, getrennte 9/10- und 10/10-Quality-Signale, Führungswechsel und eine ausführlichere Tagesübersicht.")
     cfg = notification_settings()
     a, b, c = st.columns(3)
     a.metric("Bot-Token", "✅ gesetzt" if cfg["bot_token_set"] else "❌ fehlt")
@@ -241,7 +241,7 @@ with tab3:
                 st.error(str(exc))
 
         if col_test.button("🧪 Testnachricht senden", type="primary", use_container_width=True):
-            ok, msg = send_telegram("✅ Crypto Trading Zentrale V6.4.1: Telegram-Benachrichtigungen funktionieren.")
+            ok, msg = send_telegram("✅ Crypto Trading Zentrale V6.5: Telegram-Benachrichtigungen funktionieren.")
             if ok:
                 st.success(msg)
             else:
@@ -262,15 +262,47 @@ with tab3:
                 st.success("Gespeicherte Chat-ID gelöscht. Jetzt kannst du sie neu erkennen lassen.")
                 st.rerun()
 
+    st.markdown("### Komfort-Tests")
+    t1, t2 = st.columns(2)
+    if t1.button("📊 Tagesübersicht jetzt senden", use_container_width=True):
+        preview = build_daily_summary(
+            latest_combined(), read_json(MONITOR_LATEST, {}) or {},
+            read_json(V52_LATEST, {}) or {}, read_json(V6_LATEST, {}) or {},
+            timezone=str(cfg["timezone"]),
+        )
+        ok, msg = send_telegram(preview)
+        if ok:
+            st.success("Tagesübersicht wurde gesendet.")
+        else:
+            st.error(msg)
+    if t2.button("📡 Aktuelles Top-Signal senden", use_container_width=True):
+        mon = read_json(MONITOR_LATEST, {}) or {}
+        rows_now = mon.get("rows", []) or []
+        if not rows_now:
+            st.warning("Noch kein Markt-Scan vorhanden.")
+        else:
+            r = rows_now[0]
+            rules = int(r.get("rules_ok", 0) or 0)
+            total = int(r.get("rules_total", 10) or 10)
+            txt = f"📡 Aktuelles Top-Signal: {r.get('Coin','–')} · {rules}/{total} Regeln · Edge {float(r.get('Edge',0)):.1f} · RSI {float(r.get('RSI',0)):.1f}"
+            if r.get("Fehlt"):
+                txt += f"\nFehlt: {r.get('Fehlt')}"
+            ok, msg = send_telegram(txt)
+            if ok:
+                st.success("Top-Signal wurde gesendet.")
+            else:
+                st.error(msg)
+
     st.markdown("### Was wird automatisch gemeldet?")
     rows = [
         ["Neue Paper-Trade-Aktionen", "✅" if cfg["notify_trades"] else "aus"],
-        [f"Markt-Kandidat ab {cfg['market_min_rules']}/10 Regeln", "✅" if cfg["notify_market"] else "aus"],
+        ["Quality-Warnung bei 9/10", "✅" if (cfg["notify_market"] and cfg["notify_quality_9"]) else "aus"],
+        ["Quality-Alarm bei 10/10 / READY", "✅" if (cfg["notify_market"] and cfg["notify_quality_10"]) else "aus"],
         ["Neuer Führender im Paper-Wettkampf", "✅" if cfg["notify_leader"] else "aus"],
         [f"Tagesübersicht ab {cfg['daily_hour']:02d}:00 ({cfg['timezone']})", "✅" if cfg["notify_daily"] else "aus"],
     ]
     st.dataframe(pd.DataFrame(rows, columns=["Meldung", "Status"]), use_container_width=True, hide_index=True)
-    st.caption("Diese Schalter können bei Bedarf über Railway-Variablen angepasst werden: `NOTIFY_TRADES`, `NOTIFY_MARKET_CANDIDATES`, `NOTIFY_MARKET_MIN_RULES`, `NOTIFY_LEADER_CHANGE`, `NOTIFY_DAILY_SUMMARY`, `DAILY_SUMMARY_HOUR`.")
+    st.caption("Diese Schalter können bei Bedarf über Railway-Variablen angepasst werden: `NOTIFY_TRADES`, `NOTIFY_MARKET_CANDIDATES`, `NOTIFY_QUALITY_9`, `NOTIFY_QUALITY_10`, `NOTIFY_LEADER_CHANGE`, `NOTIFY_DAILY_SUMMARY`, `DAILY_SUMMARY_HOUR`.")
 
     log = notification_log(100)
     if not log.empty:
@@ -334,4 +366,4 @@ with tab5:
         st.info("Noch kein Verlauf vorhanden. Der Cloud-Worker oder eine manuelle Auswertung legt ihn automatisch an.")
 
 st.markdown("---")
-st.caption("V6.4.1 Cloud ist weiterhin reines Paper-Trading/Monitoring. Es gibt keine automatische echte Order-Ausführung.")
+st.caption("V6.5 Cloud ist weiterhin reines Paper-Trading/Monitoring. Es gibt keine automatische echte Order-Ausführung.")
