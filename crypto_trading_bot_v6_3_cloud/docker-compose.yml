@@ -1,0 +1,15 @@
+services:
+  trading-dashboard:
+    build: .
+    ports:
+      - "8508:8501"
+    environment:
+      TRADING_DASHBOARD_PASSWORD: "CHANGE_ME"
+      AUTO_UPDATE_MINUTES: "60"
+      AUTO_MARKET_SCAN: "1"
+      DATA_DIR: "/data"
+    volumes:
+      - trading_data:/data
+    restart: unless-stopped
+volumes:
+  trading_data:

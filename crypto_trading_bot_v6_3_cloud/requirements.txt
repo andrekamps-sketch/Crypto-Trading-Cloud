@@ -1,0 +1,6 @@
+streamlit>=1.40
+pandas>=2.2
+numpy>=2.0
+yfinance>=0.2.54
+qrcode>=7.4
+pillow>=10.0

@@ -1,0 +1,12 @@
+V6.3 CLOUD – KURZ
+
+1) V6.3 entpacken.
+2) Falls V5.2 + V6 auf demselben PC liegen: import_local_states.bat starten.
+3) Lokal testen: start_local_test.bat.
+4) Für Cloud: Dockerfile beim Hoster bereitstellen.
+5) Persistenten Speicher nach /data mounten.
+6) TRADING_DASHBOARD_PASSWORD als Secret setzen.
+7) DATA_DIR=/data, AUTO_UPDATE_MINUTES=60 setzen.
+8) Nach dem ersten Online-Start ggf. im Tab Cloud-Setup die zwei State-JSONs hochladen.
+
+Keine echten Orders in V6.3.
