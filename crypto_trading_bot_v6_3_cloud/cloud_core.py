@@ -125,7 +125,28 @@ def evaluate_v6() -> dict[str, dict]:
         "BTC Grid": run_grid("BTC", bundle, start, cap, fee_rate),
         "ETH Grid": run_grid("ETH", bundle, start, cap, fee_rate),
     }
-    write_json(V6_LATEST, {"ok": True, "evaluated_at": datetime.now().astimezone().isoformat(timespec="seconds"), "rows": v6_table(results).where(pd.notna(v6_table(results)), None).to_dict(orient="records")})
+    trade_events = []
+    for strategy, result in results.items():
+        for t in result.get("trades", []) or []:
+            trade_events.append({
+                "system": "V6",
+                "strategy": strategy,
+                "timestamp": str(getattr(t, "timestamp", "")),
+                "asset": str(getattr(t, "asset", "")),
+                "action": str(getattr(t, "action", "")),
+                "price": float(getattr(t, "price", 0.0)),
+                "fee": float(getattr(t, "fee", 0.0)),
+                "pnl_eur": float(getattr(t, "realized_pnl", 0.0)),
+                "reason": str(getattr(t, "reason", "")),
+            })
+    trade_events.sort(key=lambda x: str(x.get("timestamp", "")))
+    table = v6_table(results)
+    write_json(V6_LATEST, {
+        "ok": True,
+        "evaluated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "rows": table.where(pd.notna(table), None).to_dict(orient="records"),
+        "trade_events": trade_events,
+    })
     return results
 
 

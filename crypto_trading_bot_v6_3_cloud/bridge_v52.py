@@ -26,10 +26,30 @@ def main():
         start_capital=float(comp.get("start_capital", 1000)), fee_pct=float(comp.get("fee_pct", 0.25)),
         quality_params=dict(comp.get("quality_params") or quality_breakout_frozen_params()),
     )
+    trade_events = []
+    for strategy, result in results.items():
+        log = getattr(result, "trade_log", None)
+        if log is None or log.empty:
+            continue
+        for row in log.where(pd.notna(log), None).to_dict(orient="records"):
+            trade_events.append({
+                "system": "V5.2",
+                "strategy": strategy,
+                "timestamp": str(row.get("timestamp", "")),
+                "asset": str(row.get("asset", "")),
+                "action": str(row.get("action", "")),
+                "price": row.get("price"),
+                "fee": row.get("fee_eur"),
+                "pnl_eur": row.get("pnl_eur"),
+                "reason": str(row.get("reason", "")),
+            })
+    trade_events.sort(key=lambda x: str(x.get("timestamp", "")))
+
     payload = {
         "ok": True, "started_at": comp["started_at"],
         "evaluated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "rows": table.where(pd.notna(table), None).to_dict(orient="records"),
+        "trade_events": trade_events,
     }
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 

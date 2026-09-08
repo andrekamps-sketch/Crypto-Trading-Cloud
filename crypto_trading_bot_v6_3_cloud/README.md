@@ -1,81 +1,70 @@
-# Crypto Trading Zentrale V6.3 Cloud
+# Crypto Trading Zentrale – V6.4 Cloud
 
-V6.3 ist die Cloud-/Handy-Version der bisherigen Trading-Zentrale. Sie bleibt **reines Paper-Trading und Monitoring**. Es gibt keine Funktion zum Senden echter Broker-Orders.
+V6.4 ist die 24/7-Cloud-/Handy-Zentrale für die eingefrorenen Paper-Tests aus V5.2 und V6. Sie verändert die bestehenden Regeln und Startzeitpunkte nicht und enthält weiterhin **keine echte Broker-Order-Funktion**.
 
-## Was ist neu?
+## Neu in V6.4
 
-- 24/7-fähiger Cloud-Betrieb in einem Docker-Container
-- Passwortschutz über `TRADING_DASHBOARD_PASSWORD`
-- persistenter Datenordner über `DATA_DIR` (für Cloud am besten `/data`)
-- stündlicher Hintergrund-Worker (Intervall über `AUTO_UPDATE_MINUTES`)
-- V5.2 Forward-Wettkampf und V6 Pairs/Grid gemeinsam
-- Markt-Monitor mit automatischer Aktualisierung
-- mobile Kurzansicht fürs Smartphone
-- Import der eingefrorenen V5.2-/V6-State-Dateien direkt im Browser
-- Verlauf/CSV-Export
+- automatische Paper-Auswertung über den bestehenden Worker (Standard: jede Stunde)
+- Telegram-Benachrichtigungen bei neuen Paper-Trade-Aktionen
+- Telegram-Hinweis, wenn ein Markt-Kandidat neu mindestens 9/10 Quality-Regeln erfüllt
+- Telegram-Hinweis bei Führungswechsel im Paper-Wettkampf
+- tägliche Telegram-Zusammenfassung, standardmäßig ab 20:00 Uhr Europe/Berlin
+- Telegram-Einrichtung direkt im Dashboard: Chat-ID automatisch erkennen und Testnachricht senden
+- persistent gespeicherter Benachrichtigungszustand unter `/data`, sodass keine alten Meldungen nach jedem Redeploy erneut versendet werden
 
-## Bestehende Forward-Tests übernehmen
+## Update von V6.3 auf V6.4 in Railway
 
-Die zwei wichtigen Dateien auf deinem PC sind:
+Das bestehende Railway-Volume mit Mount Path `/data` bleibt kompatibel und darf nicht gelöscht werden. Dadurch bleiben die importierten V5.2-/V6-States, Zwischenstände und Verläufe erhalten.
 
-- `crypto_trading_bot_v5_2/forward_competition.json`
-- `crypto_trading_bot_v6/v6_forward_state.json`
+1. V6.4 entpacken.
+2. Den **Inhalt** des entpackten Ordners in das Hauptverzeichnis deines bestehenden GitHub-Repositories hochladen und vorhandene Dateien ersetzen.
+3. Committen. Railway startet anschließend automatisch einen neuen Deploy.
+4. Prüfen, dass das bestehende Volume weiterhin an `/data` gemountet ist.
 
-Sie enthalten die **eingefrorenen Startzeitpunkte und Regeln**. V6.3 verändert diese Regeln nicht.
+## Telegram einrichten
 
-Wenn V5.2, V6 und V6.3 nebeneinander liegen, kannst du lokal `import_local_states.bat` starten. Das kopiert die beiden Dateien nur in den V6.3-Datenordner; die Originale bleiben unverändert.
-
-Alternativ kannst du die zwei JSON-Dateien nach der Cloud-Bereitstellung im Tab **Cloud-Setup** hochladen.
-
-## Lokal testen
-
-1. ZIP entpacken.
-2. Optional `import_local_states.bat` ausführen.
-3. `start_local_test.bat` starten.
-4. Browser: `http://localhost:8508`
-
-Für den lokalen Test ist noch kein Cloud-Server nötig.
-
-## Cloud-Betrieb
-
-Der Ordner enthält einen `Dockerfile`. Für praktisch jeden Docker-fähigen Hoster gelten dieselben Punkte:
-
-- Anwendung aus dem Dockerfile bauen.
-- Persistenten Datenspeicher nach `/data` mounten.
-- `TRADING_DASHBOARD_PASSWORD` als geheime Umgebungsvariable setzen.
-- `DATA_DIR=/data` setzen.
-- Der Hoster muss den bereitgestellten `PORT` an den Container weiterreichen (das Startskript übernimmt ihn automatisch).
-
-Empfohlene Umgebungsvariablen:
+1. In Telegram `@BotFather` öffnen.
+2. `/newbot` senden und den Anweisungen folgen.
+3. Den erzeugten Bot-Token kopieren.
+4. In Railway beim Crypto-Trading-Service unter **Variables** hinzufügen:
 
 ```text
-TRADING_DASHBOARD_PASSWORD=<langes privates Passwort>
+TELEGRAM_BOT_TOKEN=<dein Bot-Token>
+```
+
+5. Die Änderung deployen.
+6. Den eigenen neuen Bot in Telegram öffnen, **Start** drücken und z. B. `Hallo` senden.
+7. In V6.4 den Tab **🔔 Benachrichtigungen** öffnen und **Chat-ID automatisch finden & speichern** anklicken.
+8. Anschließend **Testnachricht senden**.
+
+Die Chat-ID wird im persistenten `/data`-Volume gespeichert. Alternativ kann sie als Railway-Variable `TELEGRAM_CHAT_ID` gesetzt werden.
+
+## Optionale Railway-Variablen
+
+```text
 AUTO_UPDATE_MINUTES=60
 AUTO_MARKET_SCAN=1
 WORKER_ENABLED=1
 DATA_DIR=/data
+
+NOTIFY_TRADES=1
+NOTIFY_MARKET_CANDIDATES=1
+NOTIFY_MARKET_MIN_RULES=9
+NOTIFY_LEADER_CHANGE=1
+NOTIFY_DAILY_SUMMARY=1
+DAILY_SUMMARY_HOUR=20
+NOTIFY_TIMEZONE=Europe/Berlin
 ```
 
-Wichtig: Wenn der Hoster den Dienst bei Inaktivität schlafen legt, läuft auch der stündliche Worker während dieser Schlafzeit nicht. Für echte 24/7-Aktualisierung braucht der Dienst einen **Always-on/24-7-Modus**. Beim späteren Öffnen kann die Zentrale die Paper-Ergebnisse trotzdem mit den inzwischen verfügbaren Kursen nachrechnen.
+`AUTO_UPDATE_MINUTES=60` bedeutet: der Cloud-Worker wertet die Paper-Tests und den Markt-Monitor ungefähr stündlich neu aus. Die höchste sinnvoll unterstützte Aktualisierungsfrequenz für dieses Projekt ist nicht als Hochfrequenz-Trading gedacht; die Strategien selbst basieren ohnehin auf 1h-/6h-Daten.
+
+## Benachrichtigungslogik
+
+Beim ersten Lauf nach dem Upgrade setzt V6.4 einen Baseline-Zustand. Bereits vergangene Trades werden **nicht** rückwirkend als neue Telegram-Alarme versendet. Erst danach neu auftretende Trade-Aktionen oder neu erreichte Markt-Schwellen werden gemeldet.
 
 ## Sicherheit
 
-- Keine API-Schlüssel in ZIP-Dateien, Git-Repositories oder Python-Dateien eintragen.
-- Für die öffentliche Cloud immer ein starkes Dashboard-Passwort setzen.
-- Spätere Bitpanda-Anbindung zuerst nur mit Leserechten und als Server-Secret.
-- V6.3 hat aktuell bewusst **keine Live-Order-Funktion**.
-
-## Dateien
-
-- `cloud_app.py` – mobile Cloud-Oberfläche
-- `worker.py` – automatischer Hintergrundlauf
-- `cloud_core.py` – State, Auswertung, Speicherung
-- `engines/v52/` – eingefrorene V5.2-Auswertungslogik
-- `market_data.py`, `experiments.py`, `monitor.py` – V6/Monitor-Logik
-- `Dockerfile` / `start_cloud.sh` – Cloud-Start
-- `docker-compose.yml` – optional für eigenen Server/NAS
-- `import_local_states.bat` – übernimmt die bestehenden Forward-Startdateien lokal
-
-## Hinweis
-
-Backtests und Paper-Trading können reale Ergebnisse nicht garantieren. Gebühren, Spreads, Slippage, Liquidität und Ausführung können beim echten Handel abweichen.
+- `TRADING_DASHBOARD_PASSWORD` als Railway-Secret/Variable setzen.
+- `TELEGRAM_BOT_TOKEN` ausschließlich als Railway-Variable speichern, niemals in GitHub committen.
+- Keine Broker-API-Schlüssel in Repository oder ZIP-Dateien ablegen.
+- V6.4 ist weiterhin Paper-Trading/Monitoring und kann keine echten Orders senden.

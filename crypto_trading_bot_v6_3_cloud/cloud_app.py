@@ -9,12 +9,15 @@ import pandas as pd
 import streamlit as st
 
 from cloud_core import (
-    CENTRAL_HISTORY, DATA_DIR, MONITOR_LATEST, V52_STATE, V6_STATE,
+    CENTRAL_HISTORY, DATA_DIR, MONITOR_LATEST, V52_STATE, V6_STATE, V52_LATEST, V6_LATEST,
     evaluate_all, latest_combined, read_json, save_state, scan_market, state_status,
 )
 from monitor import FROZEN_QUALITY
+from notifications import (
+    discover_chat_id, notification_log, process_notifications, send_telegram, settings as notification_settings, save_chat_id,
+)
 
-TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.3 Cloud")
+TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.4 Cloud")
 PASSWORD = os.environ.get("TRADING_DASHBOARD_PASSWORD", "")
 
 st.set_page_config(page_title=TITLE, page_icon="☁️", layout="wide")
@@ -94,7 +97,7 @@ def show_table(table: pd.DataFrame) -> None:
         d.metric("Tests mit Wert", str(len(avail)))
 
 
-tab0, tab1, tab2, tab3, tab4 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "📱 Handy", "⚙️ Cloud-Setup", "📁 Verlauf"])
+tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
 
 with tab0:
     st.subheader("Forward-Tests in der Cloud")
@@ -121,6 +124,10 @@ with tab0:
             with st.spinner("V5.2 und V6 werden nachgerechnet …"):
                 table = evaluate_all()
             st.session_state["cloud_table"] = table
+            process_notifications(
+                table, read_json(MONITOR_LATEST, {}) or {},
+                read_json(V52_LATEST, {}) or {}, read_json(V6_LATEST, {}) or {},
+            )
             st.success("Aktualisiert. Die eingefrorenen Regeln und Startzeitpunkte wurden nicht verändert.")
         except Exception as exc:
             st.error(f"Auswertung fehlgeschlagen: {exc}")
@@ -141,6 +148,10 @@ with tab1:
             with st.spinner("60 Tage 1h-Daten werden geladen …"):
                 payload = scan_market(selected)
             st.session_state["cloud_monitor"] = payload
+            process_notifications(
+                latest_combined(), payload,
+                read_json(V52_LATEST, {}) or {}, read_json(V6_LATEST, {}) or {},
+            )
         except Exception as exc:
             st.error(f"Markt-Scan fehlgeschlagen: {exc}")
     payload = st.session_state.get("cloud_monitor") or read_json(MONITOR_LATEST, {})
@@ -200,6 +211,59 @@ with tab2:
                 st.caption("Fehlt: " + str(r.get("Fehlt")))
 
 with tab3:
+    st.subheader("🔔 Telegram-Benachrichtigungen")
+    st.caption("Optional: V6.4 kann dich automatisch bei neuen Paper-Trades, neuen Markt-Kandidaten, Führungswechseln und einmal täglich über Telegram informieren.")
+    cfg = notification_settings()
+    a, b, c = st.columns(3)
+    a.metric("Bot-Token", "✅ gesetzt" if cfg["bot_token_set"] else "❌ fehlt")
+    b.metric("Chat-ID", "✅ gesetzt" if cfg["chat_id"] else "❌ fehlt")
+    c.metric("Worker-Intervall", f"{os.environ.get('AUTO_UPDATE_MINUTES','60')} Min.")
+
+    if not cfg["bot_token_set"]:
+        st.warning("In Railway unter **Variables** zuerst `TELEGRAM_BOT_TOKEN` setzen. Den Token bekommst du in Telegram von **@BotFather** mit `/newbot`. Danach Railway neu deployen.")
+    else:
+        if not cfg["chat_id"]:
+            st.info("Öffne deinen neuen Telegram-Bot, drücke **Start** und sende ihm z. B. `Hallo`. Danach kannst du die Chat-ID hier automatisch erkennen lassen.")
+            if st.button("📲 Chat-ID automatisch finden & speichern"):
+                try:
+                    cid, label = discover_chat_id()
+                    st.success(f"Chat-ID gespeichert für {label} ({cid}).")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+            with st.expander("Chat-ID manuell eintragen"):
+                manual_id = st.text_input("Telegram Chat-ID", value="")
+                if st.button("Chat-ID speichern", key="save_chat_manual"):
+                    try:
+                        save_chat_id(manual_id)
+                        st.success("Chat-ID gespeichert.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(str(exc))
+        else:
+            st.success("Telegram ist vollständig eingerichtet.")
+            if st.button("🧪 Testnachricht senden", type="primary"):
+                ok, msg = send_telegram("✅ Crypto Trading Zentrale V6.4: Telegram-Benachrichtigungen funktionieren.")
+                st.success(msg) if ok else st.error(msg)
+
+    st.markdown("### Was wird automatisch gemeldet?")
+    rows = [
+        ["Neue Paper-Trade-Aktionen", "✅" if cfg["notify_trades"] else "aus"],
+        [f"Markt-Kandidat ab {cfg['market_min_rules']}/10 Regeln", "✅" if cfg["notify_market"] else "aus"],
+        ["Neuer Führender im Paper-Wettkampf", "✅" if cfg["notify_leader"] else "aus"],
+        [f"Tagesübersicht ab {cfg['daily_hour']:02d}:00 ({cfg['timezone']})", "✅" if cfg["notify_daily"] else "aus"],
+    ]
+    st.dataframe(pd.DataFrame(rows, columns=["Meldung", "Status"]), use_container_width=True, hide_index=True)
+    st.caption("Diese Schalter können bei Bedarf über Railway-Variablen angepasst werden: `NOTIFY_TRADES`, `NOTIFY_MARKET_CANDIDATES`, `NOTIFY_MARKET_MIN_RULES`, `NOTIFY_LEADER_CHANGE`, `NOTIFY_DAILY_SUMMARY`, `DAILY_SUMMARY_HOUR`.")
+
+    log = notification_log(100)
+    if not log.empty:
+        st.markdown("### Letzte Benachrichtigungen")
+        st.dataframe(log.sort_values("timestamp", ascending=False), use_container_width=True, hide_index=True)
+    else:
+        st.info("Noch keine Telegram-Nachrichten protokolliert.")
+
+with tab4:
     st.subheader("⚙️ Cloud-Setup")
     st.write("Hier importierst du nur die zwei kleinen eingefrorenen Zustandsdateien von deinem PC. Die Originaldateien bleiben unverändert.")
     st.markdown("**V5.2:** `forward_competition.json`  ·  **V6:** `v6_forward_state.json`")
@@ -227,7 +291,7 @@ with tab3:
         st.success("Dashboard-Passwort ist als Umgebungsvariable gesetzt.")
     else:
         st.error("Noch kein `TRADING_DASHBOARD_PASSWORD` gesetzt. So nicht öffentlich ins Internet stellen.")
-    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.3 enthält aktuell überhaupt keine Order-Funktion.")
+    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.4 enthält aktuell überhaupt keine Order-Funktion.")
     st.markdown("### 24/7-Aktualisierung")
     worker = state_status().get("worker") or {}
     if worker:
@@ -235,7 +299,7 @@ with tab3:
     else:
         st.info("Auf einem Cloud-Server startet `worker.py` automatisch mit. Standard: eine Aktualisierung pro Stunde.")
 
-with tab4:
+with tab5:
     st.subheader("📁 Verlauf & Export")
     if CENTRAL_HISTORY.exists():
         try:
@@ -254,4 +318,4 @@ with tab4:
         st.info("Noch kein Verlauf vorhanden. Der Cloud-Worker oder eine manuelle Auswertung legt ihn automatisch an.")
 
 st.markdown("---")
-st.caption("V6.3 Cloud ist weiterhin reines Paper-Trading/Monitoring. Es gibt keine automatische echte Order-Ausführung.")
+st.caption("V6.4 Cloud ist weiterhin reines Paper-Trading/Monitoring. Es gibt keine automatische echte Order-Ausführung.")

@@ -1,12 +1,38 @@
-V6.3 CLOUD – KURZ
+CRYPTO TRADING ZENTRALE V6.4 CLOUD – KURZANLEITUNG
+==================================================
 
-1) V6.3 entpacken.
-2) Falls V5.2 + V6 auf demselben PC liegen: import_local_states.bat starten.
-3) Lokal testen: start_local_test.bat.
-4) Für Cloud: Dockerfile beim Hoster bereitstellen.
-5) Persistenten Speicher nach /data mounten.
-6) TRADING_DASHBOARD_PASSWORD als Secret setzen.
-7) DATA_DIR=/data, AUTO_UPDATE_MINUTES=60 setzen.
-8) Nach dem ersten Online-Start ggf. im Tab Cloud-Setup die zwei State-JSONs hochladen.
+V6.4 erweitert V6.3 um Telegram-Benachrichtigungen. Die bestehende Railway-Volume /data
+bleibt vollständig kompatibel. Beim Update werden die eingefrorenen V5.2-/V6-States nicht verändert.
 
-Keine echten Orders in V6.3.
+UPDATE VON V6.3 AUF V6.4
+------------------------
+1. ZIP entpacken.
+2. Den INHALT dieses Ordners in dasselbe GitHub-Repository-Hauptverzeichnis hochladen.
+   Vorhandene Dateien ersetzen/überschreiben.
+3. Commit changes.
+4. Railway deployed automatisch neu (oder einmal Redeploy drücken).
+5. Das bestehende Volume mit Mount Path /data NICHT löschen.
+
+TELEGRAM EINRICHTEN
+-------------------
+1. Telegram öffnen und @BotFather suchen.
+2. /newbot senden und einen Bot anlegen.
+3. Den Bot-Token kopieren.
+4. Railway -> Service -> Variables -> New Variable:
+   TELEGRAM_BOT_TOKEN = <dein Bot-Token>
+5. Änderung deployen.
+6. Deinen neuen Bot in Telegram öffnen, Start drücken und z.B. "Hallo" senden.
+7. Cloud-Zentrale öffnen -> Tab "Benachrichtigungen" ->
+   "Chat-ID automatisch finden & speichern".
+8. "Testnachricht senden" drücken.
+
+AUTOMATIK
+---------
+AUTO_UPDATE_MINUTES=60 sorgt für die stündliche Paper-Auswertung.
+Standardmäßig meldet Telegram:
+- neue Paper-Trade-Aktionen
+- neue Markt-Kandidaten ab 9/10 Quality-Regeln
+- Führungswechsel im Paper-Wettkampf
+- Tagesübersicht ab 20:00 Uhr Europe/Berlin
+
+Alles bleibt Paper-Trading. Es gibt keine echten Broker-Orders.
