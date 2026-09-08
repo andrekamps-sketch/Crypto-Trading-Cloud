@@ -144,6 +144,7 @@ def evaluate_v6() -> dict[str, dict]:
     write_json(V6_LATEST, {
         "ok": True,
         "evaluated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "start_capital": float(cap),
         "rows": table.where(pd.notna(table), None).to_dict(orient="records"),
         "trade_events": trade_events,
     })

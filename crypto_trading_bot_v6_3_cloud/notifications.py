@@ -331,6 +331,56 @@ def _events_since(events: list[dict[str, Any]], since: datetime, timezone: str) 
     return out
 
 
+def _portfolio_accounting_since_start(
+    table: pd.DataFrame | None,
+    v52_payload: dict[str, Any] | None,
+    v6_payload: dict[str, Any] | None,
+) -> dict[str, float | int] | None:
+    """Aggregate currently valued paper accounts using liquidation-equivalent values.
+
+    Net P/L is current account value minus each strategy's frozen start capital.
+    Gross-before-fees is defined as net P/L plus the fees already included in those
+    account values. This is deliberately portfolio P/L (realized + unrealized), not
+    the sum of winning trades.
+    """
+    if table is None or table.empty or "Kontowert €" not in table.columns:
+        return None
+
+    caps = {
+        "V5.2": _as_float((v52_payload or {}).get("start_capital")),
+        "V6": _as_float((v6_payload or {}).get("start_capital")),
+    }
+    x = table.copy()
+    x["_value"] = pd.to_numeric(x.get("Kontowert €"), errors="coerce")
+    x["_fees"] = pd.to_numeric(x.get("Gebühren €"), errors="coerce").fillna(0.0) if "Gebühren €" in x.columns else 0.0
+    x = x[x["_value"].notna()]
+    if x.empty:
+        return None
+
+    net = 0.0
+    fees = 0.0
+    counted = 0
+    missing_cap = False
+    for _, r in x.iterrows():
+        system = str(r.get("System", ""))
+        cap = caps.get(system)
+        if cap is None:
+            missing_cap = True
+            continue
+        net += float(r["_value"]) - float(cap)
+        fees += float(r["_fees"] or 0.0)
+        counted += 1
+
+    if counted <= 0 or missing_cap:
+        return None
+    return {
+        "accounts": counted,
+        "gross_before_fees": net + fees,
+        "fees": fees,
+        "net_after_fees": net,
+    }
+
+
 def build_daily_summary(
     table: pd.DataFrame | None,
     monitor: dict[str, Any] | None,
@@ -370,6 +420,15 @@ def build_daily_summary(
             total_trades = int(pd.to_numeric(x.get("Trades"), errors="coerce").fillna(0).sum()) if "Trades" in x.columns else 0
             total_fees = float(pd.to_numeric(x.get("Gebühren €"), errors="coerce").fillna(0).sum()) if "Gebühren €" in x.columns else 0.0
             lines.append(f"Trades seit Start: {total_trades} · Gebühren seit Start: {total_fees:.2f} €")
+
+            accounting = _portfolio_accounting_since_start(table, v52_payload, v6_payload)
+            if accounting:
+                gross = float(accounting["gross_before_fees"])
+                fees = float(accounting["fees"])
+                net = float(accounting["net_after_fees"])
+                lines.append(
+                    f"💰 Konten-P/L seit Start: Brutto {gross:+.2f} € · Gebühren -{fees:.2f} € · Netto {net:+.2f} €"
+                )
 
     events = _all_events(v52_payload, v6_payload)
     if since is None:

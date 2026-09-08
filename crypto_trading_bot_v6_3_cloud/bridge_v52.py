@@ -48,6 +48,7 @@ def main():
     payload = {
         "ok": True, "started_at": comp["started_at"],
         "evaluated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "start_capital": float(comp.get("start_capital", 1000)),
         "rows": table.where(pd.notna(table), None).to_dict(orient="records"),
         "trade_events": trade_events,
     }
