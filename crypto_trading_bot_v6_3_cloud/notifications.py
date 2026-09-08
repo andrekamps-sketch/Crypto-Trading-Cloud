@@ -331,6 +331,30 @@ def _events_since(events: list[dict[str, Any]], since: datetime, timezone: str) 
     return out
 
 
+
+
+def _strategy_accounting(
+    row: pd.Series | dict[str, Any],
+    v52_payload: dict[str, Any] | None,
+    v6_payload: dict[str, Any] | None,
+) -> dict[str, float] | None:
+    """Return gross/fees/net P/L for one currently valued paper strategy."""
+    system = str(row.get("System", ""))
+    cap = {
+        "V5.2": _as_float((v52_payload or {}).get("start_capital")),
+        "V6": _as_float((v6_payload or {}).get("start_capital")),
+    }.get(system)
+    value = _as_float(row.get("Kontowert €"))
+    fees = _as_float(row.get("Gebühren €")) or 0.0
+    if cap is None or value is None:
+        return None
+    net = float(value) - float(cap)
+    return {
+        "gross_before_fees": net + float(fees),
+        "fees": float(fees),
+        "net_after_fees": net,
+    }
+
 def _portfolio_accounting_since_start(
     table: pd.DataFrame | None,
     v52_payload: dict[str, Any] | None,
@@ -417,6 +441,14 @@ def build_daily_summary(
                     delta = value - prev
                     delta_s = f" · Δ {delta:+.2f} €"
                 lines.append(f"• {name}: {value:,.2f} € ({ret_s}){delta_s}")
+                strat_acc = _strategy_accounting(r, v52_payload, v6_payload)
+                if strat_acc:
+                    gross_s = float(strat_acc["gross_before_fees"])
+                    fees_s = float(strat_acc["fees"])
+                    net_s = float(strat_acc["net_after_fees"])
+                    lines.append(
+                        f"  ↳ Brutto {gross_s:+.2f} € · Gebühren -{fees_s:.2f} € · Netto {net_s:+.2f} €"
+                    )
             total_trades = int(pd.to_numeric(x.get("Trades"), errors="coerce").fillna(0).sum()) if "Trades" in x.columns else 0
             total_fees = float(pd.to_numeric(x.get("Gebühren €"), errors="coerce").fillna(0).sum()) if "Gebühren €" in x.columns else 0.0
             lines.append(f"Trades seit Start: {total_trades} · Gebühren seit Start: {total_fees:.2f} €")
@@ -495,8 +527,8 @@ def process_notifications(
 ) -> dict[str, Any]:
     """Compare current data with the persistent Telegram baseline.
 
-    V6.5 adds richer trade messages, separate 9/10 and 10/10 quality stages and a
-    daily summary with change since the previous summary. Existing /data state is
+    V6.5.2 adds per-strategy gross/fees/net accounting to the daily summary while preserving
+    the richer trade messages, 9/10 and 10/10 quality stages and daily change tracking. Existing /data state is
     migrated without changing the frozen paper tests.
     """
     cfg = settings()
