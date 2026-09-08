@@ -14,10 +14,10 @@ from cloud_core import (
 )
 from monitor import FROZEN_QUALITY
 from notifications import (
-    discover_chat_id, notification_log, process_notifications, send_telegram, settings as notification_settings, save_chat_id,
+    clear_saved_chat_id, discover_chat_id, notification_log, process_notifications, send_telegram, settings as notification_settings, save_chat_id, validate_chat_id,
 )
 
-TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.4 Cloud")
+TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.4.1 Cloud")
 PASSWORD = os.environ.get("TRADING_DASHBOARD_PASSWORD", "")
 
 st.set_page_config(page_title=TITLE, page_icon="☁️", layout="wide")
@@ -223,28 +223,44 @@ with tab3:
         st.warning("In Railway unter **Variables** zuerst `TELEGRAM_BOT_TOKEN` setzen. Den Token bekommst du in Telegram von **@BotFather** mit `/newbot`. Danach Railway neu deployen.")
     else:
         if not cfg["chat_id"]:
-            st.info("Öffne deinen neuen Telegram-Bot, drücke **Start** und sende ihm z. B. `Hallo`. Danach kannst du die Chat-ID hier automatisch erkennen lassen.")
-            if st.button("📲 Chat-ID automatisch finden & speichern"):
-                try:
-                    cid, label = discover_chat_id()
-                    st.success(f"Chat-ID gespeichert für {label} ({cid}).")
-                    st.rerun()
-                except Exception as exc:
-                    st.error(str(exc))
-            with st.expander("Chat-ID manuell eintragen"):
-                manual_id = st.text_input("Telegram Chat-ID", value="")
-                if st.button("Chat-ID speichern", key="save_chat_manual"):
-                    try:
-                        save_chat_id(manual_id)
-                        st.success("Chat-ID gespeichert.")
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(str(exc))
+            st.info("Öffne deinen neuen Telegram-Bot, drücke **Start** und sende ihm z. B. `Hallo`. Danach hier die Chat-ID erkennen lassen.")
         else:
-            st.success("Telegram ist vollständig eingerichtet.")
-            if st.button("🧪 Testnachricht senden", type="primary"):
-                ok, msg = send_telegram("✅ Crypto Trading Zentrale V6.4: Telegram-Benachrichtigungen funktionieren.")
-                st.success(msg) if ok else st.error(msg)
+            valid_chat, valid_detail = validate_chat_id(cfg["chat_id"])
+            if valid_chat:
+                st.success(f"Telegram-Ziel geprüft: {valid_detail}.")
+            else:
+                st.warning(f"Die aktuell gespeicherte Chat-ID ist nicht verwendbar: {valid_detail}")
+
+        col_detect, col_test = st.columns(2)
+        if col_detect.button("📲 Chat-ID neu erkennen & speichern", use_container_width=True):
+            try:
+                cid, label = discover_chat_id()
+                st.success(f"Private Chat-ID gespeichert für {label} ({cid}).")
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+
+        if col_test.button("🧪 Testnachricht senden", type="primary", use_container_width=True):
+            ok, msg = send_telegram("✅ Crypto Trading Zentrale V6.4.1: Telegram-Benachrichtigungen funktionieren.")
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+
+        with st.expander("Chat-ID manuell eintragen / reparieren"):
+            manual_id = st.text_input("Telegram Chat-ID", value="")
+            if st.button("Chat-ID prüfen & speichern", key="save_chat_manual"):
+                valid, detail = validate_chat_id(manual_id)
+                if valid:
+                    save_chat_id(manual_id)
+                    st.success(f"Chat-ID gespeichert: {detail}.")
+                    st.rerun()
+                else:
+                    st.error(f"Chat-ID nicht gespeichert: {detail}")
+            if st.button("Gespeicherte Chat-ID löschen", key="clear_chat_id"):
+                clear_saved_chat_id()
+                st.success("Gespeicherte Chat-ID gelöscht. Jetzt kannst du sie neu erkennen lassen.")
+                st.rerun()
 
     st.markdown("### Was wird automatisch gemeldet?")
     rows = [
@@ -318,4 +334,4 @@ with tab5:
         st.info("Noch kein Verlauf vorhanden. Der Cloud-Worker oder eine manuelle Auswertung legt ihn automatisch an.")
 
 st.markdown("---")
-st.caption("V6.4 Cloud ist weiterhin reines Paper-Trading/Monitoring. Es gibt keine automatische echte Order-Ausführung.")
+st.caption("V6.4.1 Cloud ist weiterhin reines Paper-Trading/Monitoring. Es gibt keine automatische echte Order-Ausführung.")

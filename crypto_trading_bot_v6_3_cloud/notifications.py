@@ -55,13 +55,15 @@ def _write_json(path: Path, payload: Any) -> None:
 
 
 def get_chat_id() -> str:
-    env = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if env:
-        return env
+    # A Chat-ID discovered/saved in the persistent volume should take precedence.
+    # This lets the dashboard repair an accidentally wrong TELEGRAM_CHAT_ID env value.
     try:
-        return CHAT_ID_FILE.read_text(encoding="utf-8").strip() if CHAT_ID_FILE.exists() else ""
+        file_value = CHAT_ID_FILE.read_text(encoding="utf-8").strip() if CHAT_ID_FILE.exists() else ""
+        if file_value:
+            return file_value
     except Exception:
-        return ""
+        pass
+    return os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
 
 def save_chat_id(chat_id: str) -> str:
@@ -70,6 +72,36 @@ def save_chat_id(chat_id: str) -> str:
         raise ValueError("Leere Telegram Chat-ID.")
     CHAT_ID_FILE.write_text(chat_id, encoding="utf-8")
     return chat_id
+
+
+def clear_saved_chat_id() -> None:
+    try:
+        CHAT_ID_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _bot_identity() -> tuple[str, str]:
+    data = _telegram_call("getMe")
+    user = data.get("result", {}) or {}
+    return str(user.get("id", "")), str(user.get("username", ""))
+
+
+def validate_chat_id(chat_id: str) -> tuple[bool, str]:
+    chat_id = str(chat_id).strip()
+    if not chat_id:
+        return False, "Leere Telegram Chat-ID."
+    try:
+        bot_id, _ = _bot_identity()
+        if bot_id and chat_id == bot_id:
+            return False, "Die Chat-ID gehört zum Bot selbst, nicht zu deinem privaten Telegram-Chat."
+        data = _telegram_call("getChat", {"chat_id": chat_id})
+        chat = data.get("result", {}) or {}
+        if str(chat.get("type", "")) != "private":
+            return False, f"Gefundener Chat ist vom Typ {chat.get('type','unbekannt')} statt private."
+        return True, str(chat.get("first_name") or chat.get("username") or "privater Telegram-Chat")
+    except Exception as exc:
+        return False, str(exc)
 
 
 def _telegram_call(method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -99,20 +131,38 @@ def _telegram_call(method: str, payload: dict[str, Any] | None = None) -> dict[s
 
 
 def discover_chat_id() -> tuple[str, str]:
-    """Find the most recent private chat after the user has messaged the bot."""
+    """Find the most recent real user private chat after the user messaged the bot.
+
+    V6.4.1 deliberately rejects the bot's own Telegram ID and all non-private chats.
+    """
+    bot_id, _ = _bot_identity()
     data = _telegram_call("getUpdates")
-    updates = data.get("result", [])
+    updates = sorted(data.get("result", []) or [], key=lambda x: int(x.get("update_id", 0)))
     candidates = []
     for upd in updates:
-        msg = upd.get("message") or upd.get("edited_message") or upd.get("channel_post") or {}
+        msg = upd.get("message") or upd.get("edited_message") or {}
+        if not msg:
+            continue
+        sender = msg.get("from") or {}
         chat = msg.get("chat") or {}
         cid = chat.get("id")
         if cid is None:
             continue
-        candidates.append((str(cid), str(chat.get("first_name") or chat.get("title") or chat.get("username") or "Telegram-Chat")))
+        if sender.get("is_bot") is True:
+            continue
+        if str(chat.get("type", "")) != "private":
+            continue
+        cid_s = str(cid)
+        if bot_id and cid_s == bot_id:
+            continue
+        label = str(chat.get("first_name") or chat.get("username") or sender.get("first_name") or sender.get("username") or "privater Telegram-Chat")
+        candidates.append((int(upd.get("update_id", 0)), cid_s, label))
     if not candidates:
-        raise RuntimeError("Noch keine Nachricht an den Bot gefunden. Öffne den Bot in Telegram, drücke Start und sende z. B. 'Hallo'.")
-    chat_id, label = candidates[-1]
+        raise RuntimeError("Keine private Nachricht von dir gefunden. Öffne deinen eigenen Bot in Telegram, drücke Start und sende 'Hallo'. Danach hier erneut erkennen.")
+    _, chat_id, label = candidates[-1]
+    ok, detail = validate_chat_id(chat_id)
+    if not ok:
+        raise RuntimeError(f"Gefundene Chat-ID wurde aus Sicherheitsgründen abgelehnt: {detail}")
     save_chat_id(chat_id)
     return chat_id, label
 
@@ -124,6 +174,9 @@ def send_telegram(text: str) -> tuple[bool, str]:
     chat_id = cfg["chat_id"]
     if not chat_id:
         return False, "Telegram Chat-ID fehlt."
+    valid, detail = validate_chat_id(chat_id)
+    if not valid:
+        return False, f"Telegram Chat-ID ungültig: {detail}"
     text = str(text).strip()
     if not text:
         return False, "Leere Nachricht."
