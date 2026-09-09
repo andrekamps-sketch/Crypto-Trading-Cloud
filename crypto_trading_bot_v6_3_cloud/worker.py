@@ -10,17 +10,21 @@ from cloud_core import (
 from notifications import process_notifications, send_telegram
 from signal_lab import process_signal_lab
 from strategy_challenger import process_challenge
+from live_paper import process_live_paper, state as live_paper_state
 
-MINUTES = max(15, int(os.environ.get("AUTO_UPDATE_MINUTES", "60")))
+FULL_MINUTES = max(15, int(os.environ.get("AUTO_UPDATE_MINUTES", "60")))
+LIVE_MINUTES = max(5, int(os.environ.get("LIVE_PAPER_UPDATE_MINUTES", "5")))
 SCAN_MARKET = os.environ.get("AUTO_MARKET_SCAN", "1").strip().lower() not in {"0", "false", "no"}
 
 
 def status(**kwargs):
-    payload = {"updated_at": datetime.now().astimezone().isoformat(timespec="seconds"), **kwargs}
+    old = read_json(WORKER_STATUS, {}) or {}
+    payload = {**old, **kwargs, "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+               "full_interval_minutes": FULL_MINUTES, "live_paper_interval_minutes": LIVE_MINUTES}
     write_json(WORKER_STATUS, payload)
 
 
-def cycle():
+def full_cycle():
     messages = []
     try:
         table = None
@@ -55,12 +59,48 @@ def cycle():
             messages.append(f"Telegram: {note.get('message')} · gesendet {note.get('sent', 0)}")
         else:
             messages.append("Telegram: nicht eingerichtet")
-        status(ok=True, message=" · ".join(messages), interval_minutes=MINUTES, notifications=note)
+        status(ok=True, full_ok=True, last_full_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+               full_message=" · ".join(messages), message=" · ".join(messages), notifications=note)
     except Exception as exc:
-        status(ok=False, message=str(exc), interval_minutes=MINUTES)
+        status(ok=False, full_ok=False, last_full_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+               full_message=str(exc), message=f"Full-Cycle Fehler: {exc}")
+
+
+def live_cycle():
+    s = live_paper_state()
+    if not s or not s.get("active", True):
+        status(live_paper_active=bool(s and s.get("active", False)),
+               last_live_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+               live_message="Live-Paper nicht aktiv")
+        return
+    try:
+        monitor_payload = read_json(MONITOR_LATEST, {}) or {}
+        res = process_live_paper(monitor_payload)
+        sent = 0
+        for event in res.get("events", []) or []:
+            txt = str(event.get("telegram", "")).strip()
+            if txt:
+                ok, _ = send_telegram(txt)
+                sent += 1 if ok else 0
+        status(ok=True, live_paper_active=True,
+               last_live_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+               live_message=str(res.get("message", "aktualisiert")), live_telegram_sent=sent,
+               message="Live-Paper: " + str(res.get("message", "aktualisiert")))
+    except Exception as exc:
+        status(ok=False, live_paper_active=True,
+               last_live_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+               live_message=str(exc), message=f"Live-Paper Fehler: {exc}")
 
 
 if __name__ == "__main__":
+    last_full = 0.0
+    last_live = 0.0
     while True:
-        cycle()
-        time.sleep(MINUTES * 60)
+        now = time.time()
+        if now - last_full >= FULL_MINUTES * 60:
+            full_cycle()
+            last_full = time.time()
+        if now - last_live >= LIVE_MINUTES * 60:
+            live_cycle()
+            last_live = time.time()
+        time.sleep(20)

@@ -21,8 +21,14 @@ from strategy_challenger import (
     CANDIDATES, PROMOTION_RULES, challenge_history, challenge_state, challenge_table,
     process_challenge, start_challenge,
 )
+from live_paper import (
+    DEFAULT_ASSETS as LIVE_DEFAULT_ASSETS, DEFAULTS as LIVE_DEFAULTS, LIVE_HISTORY, LIVE_TRADES,
+    history_dataframe as live_history_dataframe, market_dataframe as live_market_dataframe,
+    positions_dataframe as live_positions_dataframe, process_live_paper, resume_live_paper,
+    set_entry_paused, start_live_paper, state as live_paper_state, stop_live_paper, trades_dataframe as live_trades_dataframe,
+)
 
-TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.7 Cloud")
+TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.8 Cloud")
 PASSWORD = os.environ.get("TRADING_DASHBOARD_PASSWORD", "")
 
 st.set_page_config(page_title=TITLE, page_icon="☁️", layout="wide")
@@ -73,6 +79,8 @@ with st.sidebar:
     st.write(("✅" if status["v6"] else "⚪") + " V6 Experimente")
     ch_side = challenge_state()
     st.write(("✅" if ch_side and ch_side.get("active") else "⚪") + " Strategy Challenger")
+    lp_side = live_paper_state()
+    st.write(("✅" if lp_side and lp_side.get("active") else "⚪") + " Multi-Coin Live-Paper")
     worker = status.get("worker") or {}
     if worker:
         st.caption("Worker: " + ("✅ " if worker.get("ok") else "⚠️ ") + str(worker.get("message", "")))
@@ -104,7 +112,7 @@ def show_table(table: pd.DataFrame) -> None:
         d.metric("Tests mit Wert", str(len(avail)))
 
 
-tab0, tab1, tab_lab, tab_challenge, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🧪 Signal-Labor", "🏆 Strategy Challenger", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
+tab0, tab1, tab_lab, tab_challenge, tab_live, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🧪 Signal-Labor", "🏆 Strategy Challenger", "🎮 Live-Paper", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
 
 with tab0:
     st.subheader("Forward-Tests in der Cloud")
@@ -363,6 +371,136 @@ with tab_challenge:
         st.warning("Eine Promotion ändert keine laufende Strategie automatisch. Selbst bei 'PROMOTION EMPFOHLEN' bleibt der Champion unverändert, bis du ausdrücklich entscheidest.")
 
 
+with tab_live:
+    st.subheader("🎮 Multi-Coin Live-Paper")
+    st.caption("Aktuelle reale Marktpreise, aber ausschließlich Spielgeld. V6.8 enthält weiterhin keinerlei echte Broker-/Bitpanda-Orderfunktion.")
+    lp = live_paper_state()
+    monitor_now = read_json(MONITOR_LATEST, {}) or {}
+
+    if not lp:
+        st.info("Noch kein Live-Paper-Konto gestartet. Beim Start werden die Regeln und das Spielgeld separat von V5.2/V6/Challenger gespeichert.")
+        assets_lp = st.multiselect("Coins für Live-Paper", LIVE_DEFAULT_ASSETS, default=LIVE_DEFAULT_ASSETS, key="live_assets_start")
+        c1, c2, c3 = st.columns(3)
+        start_cap = c1.number_input("Spielgeld €", min_value=100.0, max_value=100000.0, value=1000.0, step=100.0)
+        position_pct = c2.number_input("Position je Einstieg %", min_value=5.0, max_value=50.0, value=20.0, step=5.0)
+        max_positions = c3.number_input("Max. offene Positionen", min_value=1, max_value=6, value=3, step=1)
+        c4, c5, c6 = st.columns(3)
+        max_invested = c4.number_input("Max. investiert %", min_value=10.0, max_value=100.0, value=60.0, step=10.0)
+        fee_pct = c5.number_input("Simulierte Gebühr %", min_value=0.0, max_value=2.0, value=0.25, step=0.05, format="%.2f")
+        slippage_pct = c6.number_input("Simulierte Slippage %", min_value=0.0, max_value=1.0, value=0.10, step=0.05, format="%.2f")
+        c7, c8, c9 = st.columns(3)
+        min_rules = c7.selectbox("Mindestens Quality-Regeln", [8, 9, 10], index=1)
+        min_edge = c8.number_input("Mindest-Edge", min_value=70.0, max_value=100.0, value=85.0, step=1.0)
+        confirmations = c9.selectbox("Bestätigungs-Scans", [1, 2, 3], index=0)
+        with st.expander("Eingefrorenes Risiko-Setup"):
+            st.write("Stop-Loss **4%** · Take-Profit **8%** · Trailing **3%** ab **+4%** · Cooldown nach Exit **6h**")
+            st.write("Der Worker aktualisiert offene Positionen standardmäßig alle **5 Minuten** mit dem neuesten verfügbaren 5-Minuten-Kurs. Qualitätssignale stammen aus dem stündlichen Markt-Scan.")
+        if st.button("🎮 Live-Paper mit Spielgeld starten", type="primary", use_container_width=True):
+            try:
+                start_live_paper(
+                    assets_lp, start_capital=float(start_cap), position_pct=float(position_pct),
+                    max_positions=int(max_positions), max_invested_pct=float(max_invested),
+                    fee_pct=float(fee_pct), slippage_pct=float(slippage_pct),
+                    min_rules=int(min_rules), min_edge=float(min_edge), confirm_scans=int(confirmations),
+                )
+                st.success("Multi-Coin Live-Paper gestartet. Es können niemals echte Orders gesendet werden.")
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+    else:
+        cfg_lp = lp.get("params") or {}
+        start_cap = float(cfg_lp.get("start_capital", 1000.0))
+        equity = float(lp.get("equity", start_cap))
+        cash = float(lp.get("cash", start_cap))
+        open_count = len(lp.get("positions", {}) or {})
+        ret = (equity / start_cap - 1) * 100 if start_cap else 0.0
+        x1, x2, x3, x4 = st.columns(4)
+        x1.metric("Live-Paper Konto", f"{equity:,.2f} €", f"{ret:+.2f}%")
+        x2.metric("Freies Spielgeld", f"{cash:,.2f} €")
+        x3.metric("Offene Positionen", f"{open_count}/{int(cfg_lp.get('max_positions',3))}")
+        x4.metric("Max. Drawdown", f"{float(lp.get('max_drawdown_pct',0)):.2f}%")
+        y1, y2, y3, y4 = st.columns(4)
+        y1.metric("Realisierter G/V", f"{float(lp.get('realized_pnl',0)):+.2f} €")
+        y2.metric("Gebühren", f"{float(lp.get('fees_total',0)):.2f} €")
+        y3.metric("Geschlossene Trades", str(int(lp.get('closed_trades',0))))
+        wins = int(lp.get('wins',0)); losses = int(lp.get('losses',0))
+        hit = wins/(wins+losses)*100 if wins+losses else 0.0
+        y4.metric("Trefferquote", f"{hit:.1f}%" if wins+losses else "–")
+
+        started = pd.Timestamp(lp.get("started_at"))
+        try:
+            started = started.tz_convert("Europe/Berlin") if started.tzinfo else started
+        except Exception:
+            pass
+        st.caption("Start: " + started.strftime("%d.%m.%Y %H:%M") + " · Coins: " + ", ".join(lp.get("assets", [])))
+        st.caption(f"Signal: ≥{int(cfg_lp.get('min_rules',9))}/10 · Edge ≥{float(cfg_lp.get('min_edge',85)):.0f} · Position {float(cfg_lp.get('position_pct',20)):.0f}% · max. investiert {float(cfg_lp.get('max_invested_pct',60)):.0f}%")
+
+        c1, c2, c3 = st.columns(3)
+        if c1.button("⚡ Jetzt mit aktuellen Kursen prüfen", type="primary", use_container_width=True):
+            try:
+                res = process_live_paper(read_json(MONITOR_LATEST, {}) or {})
+                for event in res.get("events", []) or []:
+                    txt = str(event.get("telegram", "")).strip()
+                    if txt:
+                        send_telegram(txt)
+                st.success(str(res.get("message", "Live-Paper aktualisiert")))
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+        if lp.get("entry_paused"):
+            if c2.button("▶ Neue Einstiege fortsetzen", use_container_width=True):
+                set_entry_paused(False); st.rerun()
+        else:
+            if c2.button("⏸ Neue Einstiege pausieren", use_container_width=True):
+                set_entry_paused(True); st.rerun()
+        if lp.get("active", True):
+            if c3.button("⏹ Live-Paper stoppen", use_container_width=True):
+                stop_live_paper(); st.rerun()
+        else:
+            if c3.button("▶ Live-Paper fortsetzen", use_container_width=True):
+                resume_live_paper(); st.rerun()
+
+        if lp.get("entry_paused"):
+            st.warning("Neue Einstiege sind pausiert. Bereits offene Positionen werden beim aktiven Worker weiter über Stop/Take/Trailing verwaltet.")
+        if not lp.get("active", True):
+            st.warning("Live-Paper ist vollständig gestoppt. In diesem Zustand werden auch offene Spielgeld-Positionen nicht automatisch verwaltet.")
+
+        st.markdown("### Offene Spielgeld-Positionen")
+        pdf = live_positions_dataframe(lp)
+        if pdf.empty:
+            st.info("Aktuell keine Position offen. Der Bot wartet auf die stärksten passenden Coins.")
+        else:
+            st.dataframe(pdf, use_container_width=True, hide_index=True)
+
+        st.markdown("### Aktuelle Coins")
+        mdf = live_market_dataframe(monitor_now, lp)
+        if not mdf.empty:
+            st.dataframe(mdf, use_container_width=True, hide_index=True)
+        last_up = lp.get("last_update_at")
+        if last_up:
+            st.caption("Letzte 5-Minuten-Paper-Prüfung: " + str(last_up) + " · Kursquelle: Yahoo Finance 5m (Monitoring/Paper, nicht exchange-grade Orderbuch).")
+        else:
+            st.caption("Noch keine 5-Minuten-Paper-Prüfung gespeichert. Der Cloud-Worker oder der Aktualisieren-Button startet sie.")
+
+        hdf = live_history_dataframe(1500)
+        if not hdf.empty:
+            st.markdown("### Live-Paper Kontoverlauf")
+            try:
+                chart = hdf.copy()
+                chart["timestamp"] = pd.to_datetime(chart["timestamp"], utc=True)
+                chart = chart.set_index("timestamp")
+                st.line_chart(chart[["equity_eur"]])
+            except Exception:
+                pass
+        tdf = live_trades_dataframe(300)
+        if not tdf.empty:
+            st.markdown("### Live-Paper Trades")
+            st.dataframe(tdf.sort_values("timestamp", ascending=False), use_container_width=True, hide_index=True)
+            st.download_button("⬇ Live-Paper Trades CSV", tdf.to_csv(index=False).encode("utf-8-sig"), "live_paper_trades.csv", "text/csv")
+
+        st.info("🎮 **Wichtig:** Das ist echtes Marktgeschehen mit virtuellem Geld. Es gibt in V6.8 keinen Broker-Login, keinen Trading-API-Key und keinen Codepfad zum Senden echter Orders.")
+
+
 with tab2:
     st.subheader("📱 Handy-Kurzansicht")
     table = latest_combined()
@@ -393,7 +531,7 @@ with tab2:
 
 with tab3:
     st.subheader("🔔 Telegram-Benachrichtigungen")
-    st.caption("Optional: V6.7 meldet neue Paper-Trades mit G/V, getrennte 9/10- und 10/10-Quality-Signale, Führungswechsel und eine ausführlichere Tagesübersicht.")
+    st.caption("Optional: V6.8 meldet neue Paper-Trades mit G/V, getrennte 9/10- und 10/10-Quality-Signale, Führungswechsel und eine ausführlichere Tagesübersicht.")
     cfg = notification_settings()
     a, b, c = st.columns(3)
     a.metric("Bot-Token", "✅ gesetzt" if cfg["bot_token_set"] else "❌ fehlt")
@@ -422,7 +560,7 @@ with tab3:
                 st.error(str(exc))
 
         if col_test.button("🧪 Testnachricht senden", type="primary", use_container_width=True):
-            ok, msg = send_telegram("✅ Crypto Trading Zentrale V6.7: Telegram-Benachrichtigungen funktionieren.")
+            ok, msg = send_telegram("✅ Crypto Trading Zentrale V6.8: Telegram-Benachrichtigungen funktionieren.")
             if ok:
                 st.success(msg)
             else:
@@ -520,7 +658,7 @@ with tab4:
         st.success("Dashboard-Passwort ist als Umgebungsvariable gesetzt.")
     else:
         st.error("Noch kein `TRADING_DASHBOARD_PASSWORD` gesetzt. So nicht öffentlich ins Internet stellen.")
-    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.7 enthält aktuell überhaupt keine Order-Funktion.")
+    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.8 enthält weiterhin keinerlei echte Broker-Orderfunktion; der neue Live-Paper-Modus simuliert Orders ausschließlich mit Spielgeld.")
     st.markdown("### 24/7-Aktualisierung")
     worker = state_status().get("worker") or {}
     if worker:
@@ -547,4 +685,4 @@ with tab5:
         st.info("Noch kein Verlauf vorhanden. Der Cloud-Worker oder eine manuelle Auswertung legt ihn automatisch an.")
 
 st.markdown("---")
-st.caption("V6.7 Cloud ist weiterhin reines Paper-Trading/Monitoring. Es gibt keine automatische echte Order-Ausführung.")
+st.caption("V6.8 Cloud bleibt reines Paper-Trading/Monitoring. Multi-Coin Live-Paper nutzt aktuelle Kurse, sendet aber keinerlei echte Orders.")
