@@ -8,6 +8,7 @@ from cloud_core import (
     WORKER_STATUS, V52_STATE, V6_STATE, V52_LATEST, V6_LATEST, MONITOR_LATEST,
 )
 from notifications import process_notifications
+from signal_lab import process_signal_lab
 
 MINUTES = max(15, int(os.environ.get("AUTO_UPDATE_MINUTES", "60")))
 SCAN_MARKET = os.environ.get("AUTO_MARKET_SCAN", "1").strip().lower() not in {"0", "false", "no"}
@@ -31,6 +32,11 @@ def cycle():
         if SCAN_MARKET:
             monitor_payload = scan_market()
             messages.append(f"Markt-Monitor: {len(monitor_payload.get('rows', []))} Coins")
+            lab = process_signal_lab(monitor_payload)
+            if lab.get("ok"):
+                messages.append(f"Signal-Labor: {lab.get('total', 0)} Signale, +{lab.get('new_signals', 0)} neu")
+        else:
+            lab = process_signal_lab(monitor_payload) if monitor_payload else {"ok": False}
 
         note = process_notifications(
             table,

@@ -1,36 +1,52 @@
-# V6.5.1 – Gebühren-/Netto-Patch
+# Crypto Trading Zentrale – V6.6 Signal-Labor
 
-Dieser kleine Patch erweitert nur die tägliche Telegram-Zusammenfassung. Die eingefrorenen V5.2-/V6-Regeln, Startzeitpunkte, Telegram-Einstellungen und das Railway-Volume `/data` bleiben unverändert.
+V6.6 ergänzt die bestehende Cloud-Zentrale um ein **rein beobachtendes Quality-Signal-Labor**. Die eingefrorenen V5.2-/V6-Regeln, Paper-Positionen, Telegram-Einstellungen und das Railway-Volume `/data` werden nicht verändert.
 
-## Neu
+## Neu in V6.6
 
-Die Tagesübersicht zeigt zusätzlich eine klare Gesamtzeile für alle aktuell bewertbaren Paper-Konten:
+- speichert 9/10- und 10/10-Quality-Signale automatisch
+- speichert Signalpreis, Edge, RSI, Marktphase und fehlende Regel
+- misst den Kurs danach automatisch bei ungefähr:
+  - 1 Stunde
+  - 6 Stunden
+  - 24 Stunden
+  - 3 Tagen
+  - 7 Tagen
+- führt pro Signal den bisher beobachteten maximalen Anstieg und Rückgang mit
+- trennt 9/10 und 10/10 in der Statistik
+- zeigt Trefferquote, Durchschnitt, Median, bestes und schlechtestes Ergebnis je Horizont
+- zeigt eine Coin-Auswertung nach 24 Stunden, sobald genügend Daten vorhanden sind
+- CSV-Export aller Signal-Labor-Daten
 
-```text
-💰 Konten-P/L seit Start: Brutto +9.80 € · Gebühren -18.11 € · Netto -8.31 €
-```
+## Verhalten beim ersten V6.6-Lauf
 
-Dabei gilt:
-- **Netto** = aktueller Liquidations-/Kontowert minus eingefrorenes Startkapital der aktuell bewertbaren Strategien.
-- **Gebühren** = die in denselben Kontowerten bereits berücksichtigten simulierten Gebühren.
-- **Brutto** = Netto + Gebühren, also das Portfolio-Ergebnis vor diesen Gebühren.
+Coins, die beim Update bereits auf 9/10 oder 10/10 stehen, werden einmalig als `baseline` gespeichert. Dadurch kann ihre weitere Kursentwicklung gemessen werden, ohne so zu tun, als wäre das Signal erst durch V6.6 neu entstanden. Spätere echte Übergänge werden als `transition` gespeichert.
 
-Damit wird nicht nur die Summe gewonnener Verkäufe gezeigt. Offene Positionen und deren aktuelle Kursentwicklung sind im Konten-P/L ebenfalls enthalten. Das macht die Zahl mit den im Dashboard gezeigten Kontowerten konsistent.
+## Update der bestehenden Railway-App
 
-## Installation
+Für ein bestehendes V6.5.2-System reicht der kleine Patch. Lade diese drei Dateien ins **Hauptverzeichnis** des GitHub-Repositories und ersetze die vorhandenen Dateien:
 
-Die vier Dateien aus diesem ZIP in das **Hauptverzeichnis** des bestehenden GitHub-Repositories `Crypto-Trading-Cloud` hochladen und vorhandene Dateien ersetzen:
+- `signal_lab.py` (neu)
+- `worker.py`
+- `cloud_app.py`
 
-- `notifications.py`
-- `bridge_v52.py`
-- `cloud_core.py`
-- `README.md` (optional)
+Danach Commit. Railway deployt automatisch neu.
 
-Danach `Commit changes`. Railway deployt automatisch neu.
+**Nicht löschen:** das Railway-Volume mit Mount Path `/data`. Dort liegen die laufenden Forward-Zustände, Telegram-Chat-ID und künftig auch die Signal-Labor-Daten.
 
-**Nicht löschen:**
-- Railway-Volume `crypto-trading-cloud-volume`
-- Mount Path `/data`
-- vorhandene Variables / Telegram-Token / Passwort
+Es sind **keine neuen Railway-Variablen** nötig.
 
-Nach dem Deployment einmal in der Zentrale **„Jetzt mit neuen Kursdaten auswerten“** drücken. Dadurch werden die Startkapitalwerte in den aktuellen V5.2-/V6-Auswertungsdateien ergänzt. Danach enthält auch **„Tagesübersicht jetzt senden“** die neue Brutto/Gebühren/Netto-Zeile.
+## Wo finde ich das Labor?
+
+In der Cloud-Zentrale gibt es nach dem Update den neuen Tab **🧪 Signal-Labor**. Der Worker aktualisiert es bei jedem automatischen Markt-Scan. Manuell kann der zuletzt gespeicherte Scan dort ebenfalls übernommen werden.
+
+## Dateien im Volume
+
+- `/data/signal_lab_events.json`
+- `/data/signal_lab_state.json`
+
+## Wichtig
+
+Die Statistik ist am Anfang zwangsläufig dünn. Ein einzelnes gutes 9/10-Signal beweist keinen Vorteil. Interessant wird das Labor erst mit einer größeren Zahl unabhängiger Signale über unterschiedliche Marktphasen.
+
+V6.6 bleibt reines Paper-Trading/Monitoring und enthält keine echte Broker-Order-Ausführung.

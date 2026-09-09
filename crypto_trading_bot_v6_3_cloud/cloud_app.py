@@ -16,8 +16,9 @@ from monitor import FROZEN_QUALITY
 from notifications import (
     clear_saved_chat_id, discover_chat_id, notification_log, build_daily_summary, process_notifications, send_telegram, settings as notification_settings, save_chat_id, validate_chat_id,
 )
+from signal_lab import coin_stats, events_dataframe, horizon_stats, lab_status, process_signal_lab
 
-TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.5 Cloud")
+TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.6 Cloud")
 PASSWORD = os.environ.get("TRADING_DASHBOARD_PASSWORD", "")
 
 st.set_page_config(page_title=TITLE, page_icon="☁️", layout="wide")
@@ -97,7 +98,7 @@ def show_table(table: pd.DataFrame) -> None:
         d.metric("Tests mit Wert", str(len(avail)))
 
 
-tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
+tab0, tab1, tab_lab, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🧪 Signal-Labor", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
 
 with tab0:
     st.subheader("Forward-Tests in der Cloud")
@@ -148,6 +149,9 @@ with tab1:
             with st.spinner("60 Tage 1h-Daten werden geladen …"):
                 payload = scan_market(selected)
             st.session_state["cloud_monitor"] = payload
+            lab_result = process_signal_lab(payload)
+            if lab_result.get("ok") and lab_result.get("new_signals", 0):
+                st.toast(f"Signal-Labor: {lab_result.get('new_signals', 0)} neues Signal gespeichert")
             process_notifications(
                 latest_combined(), payload,
                 read_json(V52_LATEST, {}) or {}, read_json(V6_LATEST, {}) or {},
@@ -182,6 +186,73 @@ with tab1:
     else:
         st.info("Noch kein Markt-Scan gespeichert.")
 
+with tab_lab:
+    st.subheader("🧪 Quality-Signal-Labor")
+    st.caption("V6.6 protokolliert 9/10- und 10/10-Quality-Signale und misst anschließend die Kursentwicklung. Das Labor beobachtet nur und verändert weder V5.2/V6-Regeln noch Paper-Positionen.")
+
+    mon_now = read_json(MONITOR_LATEST, {}) or {}
+    if st.button("🧪 Aktuellen Markt-Scan ins Signal-Labor übernehmen", type="primary", use_container_width=True):
+        if not mon_now.get("rows"):
+            st.warning("Noch kein Markt-Scan vorhanden. Erst im Markt-Monitor scannen.")
+        else:
+            res = process_signal_lab(mon_now)
+            if res.get("ok"):
+                st.success(f"Signal-Labor aktualisiert: {res.get('total', 0)} Signale · {res.get('new_signals', 0)} neu · {res.get('checkpoints', 0)} neue Zeit-Checkpoints.")
+            else:
+                st.warning(str(res.get("message", "Signal-Labor konnte nicht aktualisiert werden.")))
+
+    lab = lab_status()
+    a, b, c, d = st.columns(4)
+    a.metric("Signale gesamt", lab.get("total", 0))
+    b.metric("9/10", lab.get("signals_9", 0))
+    c.metric("10/10", lab.get("signals_10", 0))
+    d.metric("24h auswertbar", lab.get("complete_24h", 0))
+    if lab.get("last_scan_at"):
+        st.caption("Letzte Signal-Labor-Aktualisierung: " + str(lab.get("last_scan_at")))
+    else:
+        st.info("Das Signal-Labor startet beim nächsten automatischen Markt-Scan. Bereits aktive 9/10- oder 10/10-Kandidaten werden einmalig als **Baseline** gespeichert.")
+
+    ev = events_dataframe()
+    if not ev.empty:
+        st.markdown("### Letzte Signale")
+        show = ev.copy()
+        rename = {
+            "signal_time": "Zeit", "asset": "Coin", "stage": "Stage", "trigger": "Typ",
+            "signal_price": "Signalpreis €", "edge": "Edge", "rsi": "RSI", "market_regime": "Markt",
+            "missing": "Fehlte", "ret_1h_pct": "1h %", "ret_6h_pct": "6h %", "ret_24h_pct": "24h %",
+            "ret_3d_pct": "3T %", "ret_7d_pct": "7T %", "max_up_pct": "Max +%", "max_down_pct": "Max -%",
+        }
+        cols = [c for c in rename if c in show.columns]
+        show = show[cols].rename(columns=rename)
+        if "Zeit" in show.columns:
+            try:
+                show["Zeit"] = pd.to_datetime(show["Zeit"], utc=True).dt.tz_convert("Europe/Berlin").dt.strftime("%d.%m.%Y %H:%M")
+            except Exception:
+                pass
+        st.dataframe(show.head(200), use_container_width=True, hide_index=True)
+        st.download_button("⬇ Signal-Labor CSV", ev.to_csv(index=False).encode("utf-8-sig"), "quality_signal_labor.csv", "text/csv")
+
+        include_base = st.checkbox("V6.6-Start-Baseline in Statistik einbeziehen", value=True, help="Baseline-Signale waren beim Start von V6.6 bereits aktiv. Sie sind nützlich für die Kursbeobachtung, aber keine neu ausgelösten Übergänge.")
+        hs = horizon_stats(include_baseline=include_base)
+        st.markdown("### Ergebnis nach Zeitabstand")
+        if hs.empty:
+            st.info("Noch keine Zeit-Checkpoints abgeschlossen. Nach 1 Stunde erscheint die erste Auswertung; 6h/24h/3T/7T folgen automatisch.")
+        else:
+            st.dataframe(hs, use_container_width=True, hide_index=True)
+
+        cs = coin_stats("24h", include_baseline=include_base)
+        st.markdown("### Coins nach 24 Stunden")
+        if cs.empty:
+            st.info("Noch keine 24h-Signale auswertbar.")
+        else:
+            st.dataframe(cs, use_container_width=True, hide_index=True)
+
+        st.markdown("### So lesen wir die Werte")
+        st.caption("Positiv % = Anteil der Signale, deren Kurs am jeweiligen Checkpoint über dem Signalpreis lag. Max +% / Max -% zeigen die bislang beobachtete beste bzw. schlechteste Bewegung seit dem Signal. Erst mit genügend Signalen wird daraus eine belastbare Statistik.")
+    else:
+        st.info("Noch keine 9/10- oder 10/10-Signale gespeichert.")
+
+
 with tab2:
     st.subheader("📱 Handy-Kurzansicht")
     table = latest_combined()
@@ -212,7 +283,7 @@ with tab2:
 
 with tab3:
     st.subheader("🔔 Telegram-Benachrichtigungen")
-    st.caption("Optional: V6.5 meldet neue Paper-Trades mit G/V, getrennte 9/10- und 10/10-Quality-Signale, Führungswechsel und eine ausführlichere Tagesübersicht.")
+    st.caption("Optional: V6.6 meldet neue Paper-Trades mit G/V, getrennte 9/10- und 10/10-Quality-Signale, Führungswechsel und eine ausführlichere Tagesübersicht.")
     cfg = notification_settings()
     a, b, c = st.columns(3)
     a.metric("Bot-Token", "✅ gesetzt" if cfg["bot_token_set"] else "❌ fehlt")
@@ -241,7 +312,7 @@ with tab3:
                 st.error(str(exc))
 
         if col_test.button("🧪 Testnachricht senden", type="primary", use_container_width=True):
-            ok, msg = send_telegram("✅ Crypto Trading Zentrale V6.5: Telegram-Benachrichtigungen funktionieren.")
+            ok, msg = send_telegram("✅ Crypto Trading Zentrale V6.6: Telegram-Benachrichtigungen funktionieren.")
             if ok:
                 st.success(msg)
             else:
@@ -339,7 +410,7 @@ with tab4:
         st.success("Dashboard-Passwort ist als Umgebungsvariable gesetzt.")
     else:
         st.error("Noch kein `TRADING_DASHBOARD_PASSWORD` gesetzt. So nicht öffentlich ins Internet stellen.")
-    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.4 enthält aktuell überhaupt keine Order-Funktion.")
+    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.6 enthält aktuell überhaupt keine Order-Funktion.")
     st.markdown("### 24/7-Aktualisierung")
     worker = state_status().get("worker") or {}
     if worker:
@@ -366,4 +437,4 @@ with tab5:
         st.info("Noch kein Verlauf vorhanden. Der Cloud-Worker oder eine manuelle Auswertung legt ihn automatisch an.")
 
 st.markdown("---")
-st.caption("V6.5 Cloud ist weiterhin reines Paper-Trading/Monitoring. Es gibt keine automatische echte Order-Ausführung.")
+st.caption("V6.6 Cloud ist weiterhin reines Paper-Trading/Monitoring. Es gibt keine automatische echte Order-Ausführung.")
