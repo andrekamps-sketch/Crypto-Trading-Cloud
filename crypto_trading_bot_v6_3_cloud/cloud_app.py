@@ -27,8 +27,15 @@ from live_paper import (
     positions_dataframe as live_positions_dataframe, process_live_paper, resume_live_paper,
     set_entry_paused, start_live_paper, state as live_paper_state, stop_live_paper, trades_dataframe as live_trades_dataframe,
 )
+from live_paper_long_short import (
+    DEFAULT_ASSETS as LS_DEFAULT_ASSETS, DEFAULTS as LS_DEFAULTS,
+    history_dataframe as ls_history_dataframe, market_dataframe as ls_market_dataframe,
+    positions_dataframe as ls_positions_dataframe, process_long_short_paper, resume_long_short_paper,
+    set_entry_paused as set_ls_entry_paused, start_long_short_paper, state as long_short_state,
+    stop_long_short_paper, trades_dataframe as ls_trades_dataframe,
+)
 
-TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.8 Cloud")
+TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.9 Cloud")
 PASSWORD = os.environ.get("TRADING_DASHBOARD_PASSWORD", "")
 
 st.set_page_config(page_title=TITLE, page_icon="☁️", layout="wide")
@@ -80,7 +87,9 @@ with st.sidebar:
     ch_side = challenge_state()
     st.write(("✅" if ch_side and ch_side.get("active") else "⚪") + " Strategy Challenger")
     lp_side = live_paper_state()
-    st.write(("✅" if lp_side and lp_side.get("active") else "⚪") + " Multi-Coin Live-Paper")
+    st.write(("✅" if lp_side and lp_side.get("active") else "⚪") + " Multi-Coin Live-Paper Long-only")
+    ls_side = long_short_state()
+    st.write(("✅" if ls_side and ls_side.get("active") else "⚪") + " Live-Paper Long+Short")
     worker = status.get("worker") or {}
     if worker:
         st.caption("Worker: " + ("✅ " if worker.get("ok") else "⚠️ ") + str(worker.get("message", "")))
@@ -112,7 +121,7 @@ def show_table(table: pd.DataFrame) -> None:
         d.metric("Tests mit Wert", str(len(avail)))
 
 
-tab0, tab1, tab_lab, tab_challenge, tab_live, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🧪 Signal-Labor", "🏆 Strategy Challenger", "🎮 Live-Paper", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
+tab0, tab1, tab_lab, tab_challenge, tab_live, tab_ls, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🧪 Signal-Labor", "🏆 Strategy Challenger", "🎮 Live-Paper", "↕️ Long+Short", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
 
 with tab0:
     st.subheader("Forward-Tests in der Cloud")
@@ -501,6 +510,113 @@ with tab_live:
         st.info("🎮 **Wichtig:** Das ist echtes Marktgeschehen mit virtuellem Geld. Es gibt in V6.8 keinen Broker-Login, keinen Trading-API-Key und keinen Codepfad zum Senden echter Orders.")
 
 
+with tab_ls:
+    st.subheader("↕️ Multi-Coin Live-Paper Long + Short")
+    st.caption("Separater V6.9-Challenger mit echtem Marktgeschehen und Spielgeld. LONG profitiert von steigenden, SHORT von fallenden Kursen. Keine echten Orders, kein Hebel.")
+    ls = long_short_state()
+    monitor_ls = read_json(MONITOR_LATEST, {}) or {}
+
+    if not ls:
+        st.info("Dieser Test startet mit einem eigenen Spielgeldkonto und verändert das bestehende V6.8 Long-only-Live-Paper nicht.")
+        assets_ls = st.multiselect("Coins für Long+Short", LS_DEFAULT_ASSETS, default=LS_DEFAULT_ASSETS, key="ls_assets_start")
+        c1, c2, c3 = st.columns(3)
+        ls_cap = c1.number_input("Spielgeld Long+Short €", min_value=100.0, max_value=100000.0, value=1000.0, step=100.0, key="ls_cap")
+        ls_pos = c2.number_input("Position je Einstieg %", min_value=5.0, max_value=40.0, value=20.0, step=5.0, key="ls_pos")
+        ls_max = c3.number_input("Max. offene Positionen", min_value=1, max_value=6, value=3, step=1, key="ls_max")
+        c4, c5, c6 = st.columns(3)
+        ls_exposure = c4.number_input("Max. Gesamt-Exposure %", min_value=10.0, max_value=100.0, value=60.0, step=10.0, key="ls_exp")
+        ls_fee = c5.number_input("Simulierte Gebühr %", min_value=0.0, max_value=2.0, value=0.25, step=0.05, format="%.2f", key="ls_fee")
+        ls_slip = c6.number_input("Simulierte Slippage %", min_value=0.0, max_value=1.0, value=0.10, step=0.05, format="%.2f", key="ls_slip")
+        c7, c8, c9 = st.columns(3)
+        ls_long_rules = c7.selectbox("LONG: Quality-Regeln", [8, 9, 10], index=1, key="ls_long_rules")
+        ls_long_edge = c8.number_input("LONG: Mindest-Edge", min_value=70.0, max_value=100.0, value=85.0, step=1.0, key="ls_long_edge")
+        ls_conf = c9.selectbox("Bestätigungs-Scans", [1, 2, 3], index=0, key="ls_conf")
+        c10, c11, c12 = st.columns(3)
+        ls_short_rules = c10.selectbox("SHORT: bearish Regeln", [6, 7, 8], index=1, key="ls_short_rules")
+        ls_short_edge = c11.number_input("SHORT: Mindest-Edge", min_value=60.0, max_value=95.0, value=72.0, step=1.0, key="ls_short_edge")
+        ls_funding = c12.number_input("SHORT Funding / 8h %", min_value=0.0, max_value=0.20, value=0.01, step=0.01, format="%.2f", key="ls_funding")
+        with st.expander("So wird SHORT simuliert"):
+            st.write("SHORT ist hier **nur Paper-Trading**. Pro Short wird 1:1 Spielgeld als Sicherheit reserviert – **kein Hebel**.")
+            st.write("Ein Short gewinnt, wenn der Coin nach dem virtuellen Einstieg fällt. Stop **+4%**, Ziel **−8%**, Trailing **3%** ab **+4% Gewinn**.")
+            st.write("Zusätzlich werden Gebühren, Slippage und ein konservativer Funding-Kostensatz simuliert. Reales Shorting würde später Margin/Derivate erfordern und ist nicht dasselbe wie ein normaler Spot-Kauf bei Bitpanda.")
+        if st.button("↕️ Long+Short mit 1.000 € Spielgeld starten", type="primary", use_container_width=True):
+            try:
+                start_long_short_paper(
+                    assets_ls, start_capital=float(ls_cap), position_pct=float(ls_pos), max_positions=int(ls_max),
+                    max_exposure_pct=float(ls_exposure), fee_pct=float(ls_fee), slippage_pct=float(ls_slip),
+                    long_min_rules=int(ls_long_rules), long_min_edge=float(ls_long_edge), confirm_scans=int(ls_conf),
+                    short_min_rules=int(ls_short_rules), short_min_edge=float(ls_short_edge), short_funding_pct_per_8h=float(ls_funding),
+                )
+                st.success("Long+Short Live-Paper gestartet. Es wird ausschließlich Spielgeld verwendet.")
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+    else:
+        cfg_ls = ls.get("params") or {}
+        start_ls = float(cfg_ls.get("start_capital", 1000.0)); equity_ls = float(ls.get("equity", start_ls)); cash_ls = float(ls.get("cash", start_ls))
+        ret_ls = (equity_ls/start_ls-1)*100 if start_ls else 0.0
+        positions_ls = ls.get("positions", {}) or {}
+        long_open = sum(1 for p in positions_ls.values() if p.get("side") == "LONG")
+        short_open = sum(1 for p in positions_ls.values() if p.get("side") == "SHORT")
+        a,b,c,d = st.columns(4)
+        a.metric("Long+Short Konto", f"{equity_ls:,.2f} €", f"{ret_ls:+.2f}%")
+        b.metric("Freies Spielgeld", f"{cash_ls:,.2f} €")
+        c.metric("Offen", f"{len(positions_ls)}/{int(cfg_ls.get('max_positions',3))}", f"LONG {long_open} · SHORT {short_open}")
+        d.metric("Max. Drawdown", f"{float(ls.get('max_drawdown_pct',0)):.2f}%")
+        e,f,g,h = st.columns(4)
+        e.metric("Realisierter G/V", f"{float(ls.get('realized_pnl',0)):+.2f} €")
+        f.metric("Gebühren", f"{float(ls.get('fees_total',0)):.2f} €")
+        g.metric("Funding bezahlt", f"{float(ls.get('funding_total',0)):.2f} €")
+        wins_ls=int(ls.get('wins',0)); losses_ls=int(ls.get('losses',0)); hit_ls=wins_ls/(wins_ls+losses_ls)*100 if wins_ls+losses_ls else 0.0
+        h.metric("Trefferquote", f"{hit_ls:.1f}%" if wins_ls+losses_ls else "–")
+        st.caption(f"LONG-Einstiege {int(ls.get('long_entries',0))} · SHORT-Einstiege {int(ls.get('short_entries',0))} · geschlossen {int(ls.get('closed_trades',0))}")
+        st.caption(f"LONG: ≥{int(cfg_ls.get('long_min_rules',9))}/10 & Edge ≥{float(cfg_ls.get('long_min_edge',85)):.0f} · SHORT: ≥{int(cfg_ls.get('short_min_rules',7))}/8 & Edge ≥{float(cfg_ls.get('short_min_edge',72)):.0f}")
+
+        c1,c2,c3 = st.columns(3)
+        if c1.button("⚡ Long+Short jetzt prüfen", type="primary", use_container_width=True):
+            try:
+                res_ls = process_long_short_paper(read_json(MONITOR_LATEST, {}) or {})
+                for event in res_ls.get("events", []) or []:
+                    txt = str(event.get("telegram", "")).strip()
+                    if txt: send_telegram(txt)
+                st.success(str(res_ls.get("message", "aktualisiert"))); st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+        if ls.get("entry_paused"):
+            if c2.button("▶ Neue LONG/SHORT-Einstiege fortsetzen", use_container_width=True): set_ls_entry_paused(False); st.rerun()
+        else:
+            if c2.button("⏸ Neue Einstiege pausieren", use_container_width=True): set_ls_entry_paused(True); st.rerun()
+        if ls.get("active", True):
+            if c3.button("⏹ Long+Short stoppen", use_container_width=True): stop_long_short_paper(); st.rerun()
+        else:
+            if c3.button("▶ Long+Short fortsetzen", use_container_width=True): resume_long_short_paper(); st.rerun()
+
+        st.markdown("### Offene LONG-/SHORT-Positionen")
+        posdf_ls = ls_positions_dataframe(ls)
+        if posdf_ls.empty: st.info("Aktuell keine Position. Der Bot wartet auf einen LONG- oder SHORT-Kandidaten.")
+        else: st.dataframe(posdf_ls, use_container_width=True, hide_index=True)
+
+        st.markdown("### Multi-Coin Entscheidung")
+        market_ls = ls_market_dataframe(monitor_ls, ls)
+        if not market_ls.empty: st.dataframe(market_ls, use_container_width=True, hide_index=True)
+        st.caption("BULL: neue SHORTs werden gebremst · BEAR: neue LONGs werden gebremst · NEUTRAL: beide Richtungen können antreten.")
+
+        hist_ls = ls_history_dataframe(1500)
+        if not hist_ls.empty:
+            st.markdown("### Long+Short Kontoverlauf")
+            try:
+                chart_ls=hist_ls.copy(); chart_ls["timestamp"]=pd.to_datetime(chart_ls["timestamp"], utc=True); chart_ls=chart_ls.set_index("timestamp")
+                st.line_chart(chart_ls[["equity_eur"]])
+            except Exception: pass
+        trades_ls = ls_trades_dataframe(400)
+        if not trades_ls.empty:
+            st.markdown("### Long+Short Trades")
+            st.dataframe(trades_ls.sort_values("timestamp", ascending=False), use_container_width=True, hide_index=True)
+            st.download_button("⬇ Long+Short Trades CSV", trades_ls.to_csv(index=False).encode("utf-8-sig"), "live_paper_long_short_trades.csv", "text/csv")
+
+        st.warning("↕️ **Nur Simulation:** SHORTs sind 1x-paper-simulierte Positionen. V6.9 enthält weiterhin keinen Broker-Login, keinen API-Key und keine Funktion für echte Orders.")
+
+
 with tab2:
     st.subheader("📱 Handy-Kurzansicht")
     table = latest_combined()
@@ -658,7 +774,7 @@ with tab4:
         st.success("Dashboard-Passwort ist als Umgebungsvariable gesetzt.")
     else:
         st.error("Noch kein `TRADING_DASHBOARD_PASSWORD` gesetzt. So nicht öffentlich ins Internet stellen.")
-    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.8 enthält weiterhin keinerlei echte Broker-Orderfunktion; der neue Live-Paper-Modus simuliert Orders ausschließlich mit Spielgeld.")
+    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.9 enthält weiterhin keinerlei echte Broker-Orderfunktion; der neue Live-Paper-Modus simuliert Orders ausschließlich mit Spielgeld.")
     st.markdown("### 24/7-Aktualisierung")
     worker = state_status().get("worker") or {}
     if worker:
@@ -685,4 +801,4 @@ with tab5:
         st.info("Noch kein Verlauf vorhanden. Der Cloud-Worker oder eine manuelle Auswertung legt ihn automatisch an.")
 
 st.markdown("---")
-st.caption("V6.8 Cloud bleibt reines Paper-Trading/Monitoring. Multi-Coin Live-Paper nutzt aktuelle Kurse, sendet aber keinerlei echte Orders.")
+st.caption("V6.9 Cloud bleibt reines Paper-Trading/Monitoring. Multi-Coin Live-Paper nutzt aktuelle Kurse, sendet aber keinerlei echte Orders.")

@@ -11,6 +11,7 @@ from notifications import process_notifications, send_telegram
 from signal_lab import process_signal_lab
 from strategy_challenger import process_challenge
 from live_paper import process_live_paper, state as live_paper_state
+from live_paper_long_short import process_long_short_paper, state as long_short_state
 
 FULL_MINUTES = max(15, int(os.environ.get("AUTO_UPDATE_MINUTES", "60")))
 LIVE_MINUTES = max(5, int(os.environ.get("LIVE_PAPER_UPDATE_MINUTES", "5")))
@@ -67,27 +68,41 @@ def full_cycle():
 
 
 def live_cycle():
-    s = live_paper_state()
-    if not s or not s.get("active", True):
-        status(live_paper_active=bool(s and s.get("active", False)),
+    long_only = live_paper_state()
+    long_short = long_short_state()
+    if not (long_only and long_only.get("active", True)) and not (long_short and long_short.get("active", True)):
+        status(live_paper_active=False, long_short_active=False,
                last_live_at=datetime.now().astimezone().isoformat(timespec="seconds"),
-               live_message="Live-Paper nicht aktiv")
+               live_message="Live-Paper-Systeme nicht aktiv")
         return
     try:
         monitor_payload = read_json(MONITOR_LATEST, {}) or {}
-        res = process_live_paper(monitor_payload)
         sent = 0
-        for event in res.get("events", []) or []:
-            txt = str(event.get("telegram", "")).strip()
-            if txt:
-                ok, _ = send_telegram(txt)
-                sent += 1 if ok else 0
-        status(ok=True, live_paper_active=True,
+        messages = []
+        if long_only and long_only.get("active", True):
+            res = process_live_paper(monitor_payload)
+            messages.append("Long-only: " + str(res.get("message", "aktualisiert")))
+            for event in res.get("events", []) or []:
+                txt = str(event.get("telegram", "")).strip()
+                if txt:
+                    ok, _ = send_telegram(txt)
+                    sent += 1 if ok else 0
+        if long_short and long_short.get("active", True):
+            res_ls = process_long_short_paper(monitor_payload)
+            messages.append("Long+Short: " + str(res_ls.get("message", "aktualisiert")))
+            for event in res_ls.get("events", []) or []:
+                txt = str(event.get("telegram", "")).strip()
+                if txt:
+                    ok, _ = send_telegram(txt)
+                    sent += 1 if ok else 0
+        msg = " · ".join(messages)
+        status(ok=True, live_paper_active=bool(long_only and long_only.get("active", True)),
+               long_short_active=bool(long_short and long_short.get("active", True)),
                last_live_at=datetime.now().astimezone().isoformat(timespec="seconds"),
-               live_message=str(res.get("message", "aktualisiert")), live_telegram_sent=sent,
-               message="Live-Paper: " + str(res.get("message", "aktualisiert")))
+               live_message=msg, live_telegram_sent=sent, message=msg)
     except Exception as exc:
-        status(ok=False, live_paper_active=True,
+        status(ok=False, live_paper_active=bool(long_only and long_only.get("active", True)),
+               long_short_active=bool(long_short and long_short.get("active", True)),
                last_live_at=datetime.now().astimezone().isoformat(timespec="seconds"),
                live_message=str(exc), message=f"Live-Paper Fehler: {exc}")
 
