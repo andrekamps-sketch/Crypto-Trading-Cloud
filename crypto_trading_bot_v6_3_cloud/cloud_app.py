@@ -585,7 +585,7 @@ with tab_ls:
         if ls.get("entry_paused"):
             if c2.button("▶ Neue LONG/SHORT-Einstiege fortsetzen", use_container_width=True): set_ls_entry_paused(False); st.rerun()
         else:
-            if c2.button("⏸ Neue Einstiege pausieren", use_container_width=True): set_ls_entry_paused(True); st.rerun()
+            if c2.button("⏸ Neue Einstiege pausieren", key="ls_pause_new_entries", use_container_width=True): set_ls_entry_paused(True); st.rerun()
         if ls.get("active", True):
             if c3.button("⏹ Long+Short stoppen", use_container_width=True): stop_long_short_paper(); st.rerun()
         else:
