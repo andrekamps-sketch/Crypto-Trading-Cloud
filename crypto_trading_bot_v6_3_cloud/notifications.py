@@ -26,6 +26,14 @@ def _bool_env(name: str, default: bool = True) -> bool:
     return raw.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
+def _int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
 def settings() -> dict[str, Any]:
     return {
         "bot_token_set": bool(os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()),
@@ -34,10 +42,14 @@ def settings() -> dict[str, Any]:
         "notify_market": _bool_env("NOTIFY_MARKET_CANDIDATES", True),
         "notify_quality_9": _bool_env("NOTIFY_QUALITY_9", True),
         "notify_quality_10": _bool_env("NOTIFY_QUALITY_10", True),
-        "market_min_rules": max(1, min(10, int(os.environ.get("NOTIFY_MARKET_MIN_RULES", "9")))),
+        "market_min_rules": _int_env("NOTIFY_MARKET_MIN_RULES", 9, 1, 10),
         "notify_leader": _bool_env("NOTIFY_LEADER_CHANGE", True),
+        # A temporary lead must survive several scans and a minimum amount of time
+        # before Telegram announces it. This prevents hourly leader-flip spam.
+        "leader_confirm_scans": _int_env("LEADER_CONFIRM_SCANS", 3, 1, 24),
+        "leader_confirm_minutes": _int_env("LEADER_CONFIRM_MINUTES", 120, 0, 1440),
         "notify_daily": _bool_env("NOTIFY_DAILY_SUMMARY", True),
-        "daily_hour": max(0, min(23, int(os.environ.get("DAILY_SUMMARY_HOUR", "20")))),
+        "daily_hour": _int_env("DAILY_SUMMARY_HOUR", 20, 0, 23),
         "timezone": os.environ.get("NOTIFY_TIMEZONE", "Europe/Berlin"),
     }
 
@@ -557,16 +569,73 @@ def process_notifications(
                 errors.append(msg)
     state["seen_trade_events"] = event_keys[-1000:]
 
-    # --- Leader change ------------------------------------------------------
+    # --- Leader change: only announce a confirmed lead ---------------------
+    # `state["leader"]` remains the last CONFIRMED leader. Existing V6.5/V6.7
+    # state therefore migrates safely: the old last-seen leader becomes the
+    # initial confirmed leader, and only future changes need confirmation.
     leader = _leader_from_table(table)
     current_leader = leader[0] if leader else ""
-    previous_leader = str(state.get("leader", ""))
-    if cfg["notify_leader"] and not first_run and current_leader and previous_leader and current_leader != previous_leader:
-        ok, msg = send_telegram(f"🏆 Neuer Führender im Paper-Wettkampf: {current_leader}\nKontowert {leader[1]:,.2f} €")
-        sent += int(ok)
-        if not ok:
-            errors.append(msg)
-    state["leader"] = current_leader
+    confirmed_leader = str(state.get("leader", ""))
+    candidate = str(state.get("leader_candidate", ""))
+    try:
+        candidate_scans = int(state.get("leader_candidate_scans", 0) or 0)
+    except (TypeError, ValueError):
+        candidate_scans = 0
+    candidate_since_raw = str(state.get("leader_candidate_since", "") or "")
+    now_for_leader = datetime.now().astimezone()
+
+    if not current_leader:
+        state["leader_candidate"] = ""
+        state["leader_candidate_scans"] = 0
+        state["leader_candidate_since"] = ""
+    elif not confirmed_leader:
+        # First usable observation becomes the baseline without a Telegram alert.
+        state["leader"] = current_leader
+        state["leader_candidate"] = ""
+        state["leader_candidate_scans"] = 0
+        state["leader_candidate_since"] = ""
+    elif current_leader == confirmed_leader:
+        # The old champion recovered before confirmation: discard the candidate.
+        state["leader_candidate"] = ""
+        state["leader_candidate_scans"] = 0
+        state["leader_candidate_since"] = ""
+    else:
+        if candidate != current_leader:
+            candidate = current_leader
+            candidate_scans = 1
+            candidate_since_raw = now_for_leader.isoformat(timespec="seconds")
+        else:
+            candidate_scans += 1
+
+        state["leader_candidate"] = candidate
+        state["leader_candidate_scans"] = candidate_scans
+        state["leader_candidate_since"] = candidate_since_raw
+
+        try:
+            candidate_since = datetime.fromisoformat(candidate_since_raw)
+            if candidate_since.tzinfo is None:
+                candidate_since = candidate_since.astimezone()
+            elapsed_minutes = max(0.0, (now_for_leader - candidate_since).total_seconds() / 60.0)
+        except Exception:
+            elapsed_minutes = 0.0
+
+        enough_scans = candidate_scans >= int(cfg["leader_confirm_scans"])
+        enough_time = elapsed_minutes >= float(cfg["leader_confirm_minutes"])
+        if enough_scans and enough_time:
+            if cfg["notify_leader"] and not first_run:
+                ok, msg = send_telegram(
+                    f"🏆 Bestätigter Führungswechsel im Paper-Wettkampf: {current_leader}\n"
+                    f"Kontowert {leader[1]:,.2f} € · {candidate_scans} Scans in Folge vorne"
+                )
+                sent += int(ok)
+                if not ok:
+                    errors.append(msg)
+            # Update even when leader notifications are disabled. That keeps the
+            # baseline current and avoids stale alerts if they are enabled later.
+            state["leader"] = current_leader
+            state["leader_candidate"] = ""
+            state["leader_candidate_scans"] = 0
+            state["leader_candidate_since"] = ""
 
     # --- Market candidates: separate 9/10 and 10/10 stages -----------------
     rows = (monitor_payload or {}).get("rows", []) or []
