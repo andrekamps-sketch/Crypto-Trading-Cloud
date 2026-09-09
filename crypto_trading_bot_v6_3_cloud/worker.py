@@ -12,6 +12,7 @@ from signal_lab import process_signal_lab
 from strategy_challenger import process_challenge
 from live_paper import process_live_paper, state as live_paper_state
 from live_paper_long_short import process_long_short_paper, state as long_short_state
+from fee_aware_grid import process_fee_grid, state as fee_grid_state
 
 FULL_MINUTES = max(15, int(os.environ.get("AUTO_UPDATE_MINUTES", "60")))
 LIVE_MINUTES = max(5, int(os.environ.get("LIVE_PAPER_UPDATE_MINUTES", "5")))
@@ -49,6 +50,11 @@ def full_cycle():
             messages.append("Strategy Challenger: " + str(challenger.get("message", "aktualisiert")))
             for alert in challenger.get("events", []) or []:
                 send_telegram(alert)
+
+        fg = fee_grid_state()
+        if fg and fg.get("active", True):
+            fee_res = process_fee_grid()
+            messages.append("Fee-Aware Grid: " + str(fee_res.get("message", "aktualisiert")))
 
         note = process_notifications(
             table,

@@ -34,8 +34,13 @@ from live_paper_long_short import (
     set_entry_paused as set_ls_entry_paused, start_long_short_paper, state as long_short_state,
     stop_long_short_paper, trades_dataframe as ls_trades_dataframe,
 )
+from fee_aware_grid import (
+    DEFAULTS as FEE_GRID_DEFAULTS, history_dataframe as fee_grid_history, latest as fee_grid_latest,
+    process_fee_grid, result_dataframe as fee_grid_results, resume_fee_grid,
+    start_fee_grid, state as fee_grid_state, stop_fee_grid,
+)
 
-TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.9 Cloud")
+TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.10 Cloud")
 PASSWORD = os.environ.get("TRADING_DASHBOARD_PASSWORD", "")
 
 st.set_page_config(page_title=TITLE, page_icon="☁️", layout="wide")
@@ -90,6 +95,8 @@ with st.sidebar:
     st.write(("✅" if lp_side and lp_side.get("active") else "⚪") + " Multi-Coin Live-Paper Long-only")
     ls_side = long_short_state()
     st.write(("✅" if ls_side and ls_side.get("active") else "⚪") + " Live-Paper Long+Short")
+    fg_side = fee_grid_state()
+    st.write(("✅" if fg_side and fg_side.get("active") else "⚪") + " Fee-Aware Grid Vergleich")
     worker = status.get("worker") or {}
     if worker:
         st.caption("Worker: " + ("✅ " if worker.get("ok") else "⚠️ ") + str(worker.get("message", "")))
@@ -121,7 +128,7 @@ def show_table(table: pd.DataFrame) -> None:
         d.metric("Tests mit Wert", str(len(avail)))
 
 
-tab0, tab1, tab_lab, tab_challenge, tab_live, tab_ls, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🧪 Signal-Labor", "🏆 Strategy Challenger", "🎮 Live-Paper", "↕️ Long+Short", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
+tab0, tab1, tab_lab, tab_challenge, tab_live, tab_ls, tab_feegrid, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🧪 Signal-Labor", "🏆 Strategy Challenger", "🎮 Live-Paper", "↕️ Long+Short", "💸 Fee-Grid", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
 
 with tab0:
     st.subheader("Forward-Tests in der Cloud")
@@ -512,7 +519,7 @@ with tab_live:
 
 with tab_ls:
     st.subheader("↕️ Multi-Coin Live-Paper Long + Short")
-    st.caption("Separater V6.9-Challenger mit echtem Marktgeschehen und Spielgeld. LONG profitiert von steigenden, SHORT von fallenden Kursen. Keine echten Orders, kein Hebel.")
+    st.caption("Separater Long+Short-Challenger mit echtem Marktgeschehen und Spielgeld. LONG profitiert von steigenden, SHORT von fallenden Kursen. Keine echten Orders, kein Hebel.")
     ls = long_short_state()
     monitor_ls = read_json(MONITOR_LATEST, {}) or {}
 
@@ -614,7 +621,99 @@ with tab_ls:
             st.dataframe(trades_ls.sort_values("timestamp", ascending=False), use_container_width=True, hide_index=True)
             st.download_button("⬇ Long+Short Trades CSV", trades_ls.to_csv(index=False).encode("utf-8-sig"), "live_paper_long_short_trades.csv", "text/csv")
 
-        st.warning("↕️ **Nur Simulation:** SHORTs sind 1x-paper-simulierte Positionen. V6.9 enthält weiterhin keinen Broker-Login, keinen API-Key und keine Funktion für echte Orders.")
+        st.warning("↕️ **Nur Simulation:** SHORTs sind 1x-paper-simulierte Positionen. V6.10 enthält weiterhin keinen Broker-Login, keinen API-Key und keine Funktion für echte Orders.")
+
+
+with tab_feegrid:
+    st.subheader("💸 Fee-Aware Grid Challenger")
+    st.caption("Separater Shadow-Vergleich: Das normale BTC-/ETH-Adaptive-Grid läuft ab demselben Startpunkt gegen eine gebührenbewusstere Variante. Die laufenden V6-Grids werden nicht verändert.")
+    fg = fee_grid_state()
+    if not fg:
+        v6s = state_status().get("v6") or {}
+        fee_default = float(v6s.get("fee_pct", FEE_GRID_DEFAULTS["fee_pct"]) or FEE_GRID_DEFAULTS["fee_pct"])
+        st.info("Noch keine Fee-Grid-Saison gestartet. Beide Varianten beginnen beim Start gleichzeitig mit je 1.000 € Spielgeld pro Coin.")
+        a,b,c = st.columns(3)
+        capital_fg = a.number_input("Startkapital je Variante (€)", min_value=100.0, value=1000.0, step=100.0, key="fg_capital")
+        slip_fg = b.number_input("angenommene Slippage je Order (%)", min_value=0.0, max_value=2.0, value=float(FEE_GRID_DEFAULTS["slippage_pct"]), step=0.05, key="fg_slip")
+        buffer_fg = c.number_input("Sicherheitspuffer (%)", min_value=0.0, max_value=3.0, value=float(FEE_GRID_DEFAULTS["safety_buffer_pct"]), step=0.05, key="fg_buffer")
+        hurdle = 2*fee_default + 2*slip_fg + buffer_fg
+        st.write(f"**Gebühr:** {fee_default:.2f}% je Order · **Kostenhürde für neue Exposition:** ca. {hurdle:.2f}% erwartete Rücklauf-Strecke")
+        st.caption("Zusätzlich: 2 abgeschlossene Stunden Bestätigung, mindestens 3 Stunden zwischen Rebalances und mindestens 0,70% Kursweg seit dem letzten Rebalance. Risk-off-Ausstiege werden nie verzögert.")
+        if st.button("🏁 Fee-Aware-vs-Standard ab jetzt starten", type="primary", use_container_width=True, key="fg_start"):
+            try:
+                start_fee_grid(float(capital_fg), fee_default, slippage_pct=float(slip_fg), safety_buffer_pct=float(buffer_fg))
+                res = process_fee_grid()
+                st.success("Fee-Grid-Vergleich eingefroren. Es zählen nur abgeschlossene 1h-Kerzen ab jetzt.")
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+    else:
+        started_fg = pd.Timestamp(fg.get("started_at"))
+        try:
+            local_fg = started_fg.tz_convert("Europe/Berlin") if started_fg.tzinfo else started_fg
+        except Exception:
+            local_fg = started_fg
+        cfg_fg = fg.get("params") or {}
+        latest_fg = fee_grid_latest()
+        summary_fg = latest_fg.get("summary", {}) if latest_fg else {}
+        a,b,c,d = st.columns(4)
+        a.metric("Start", local_fg.strftime("%d.%m. %H:%M"))
+        b.metric("Gebühr", f"{float(cfg_fg.get('fee_pct',0.25)):.2f}%")
+        hurdle_fg = 2*float(cfg_fg.get('fee_pct',0.25)) + 2*float(cfg_fg.get('slippage_pct',0.10)) + float(cfg_fg.get('safety_buffer_pct',0.35))
+        c.metric("Kostenhürde", f"{hurdle_fg:.2f}%")
+        d.metric("Status", "läuft" if fg.get("active", True) else "gestoppt")
+
+        cc1,cc2 = st.columns(2)
+        if cc1.button("🔄 Fee-Grid jetzt auswerten", type="primary", use_container_width=True, key="fg_update"):
+            try:
+                res = process_fee_grid()
+                st.success(str(res.get("message", "aktualisiert")))
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+        if fg.get("active", True):
+            if cc2.button("⏹ Fee-Grid-Vergleich stoppen", use_container_width=True, key="fg_stop"):
+                stop_fee_grid(); st.rerun()
+        else:
+            if cc2.button("▶ Fee-Grid-Vergleich fortsetzen", use_container_width=True, key="fg_resume"):
+                resume_fee_grid(); st.rerun()
+
+        rdf = fee_grid_results()
+        if rdf.empty:
+            st.info("Noch keine abgeschlossene 1h-Kerze seit dem Start auswertbar.")
+        else:
+            st.markdown("### Standard gegen Fee-Aware")
+            st.dataframe(rdf, use_container_width=True, hide_index=True)
+            for asset in ["BTC", "ETH"]:
+                x = summary_fg.get(asset, {}) or {}
+                advantage = float(x.get("net_advantage_eur", 0) or 0)
+                saved = float(x.get("fees_saved_eur", 0) or 0)
+                if advantage > 0:
+                    st.success(f"{asset}: Fee-Aware liegt aktuell {advantage:+.2f} € vor Standard und hat {saved:+.2f} € Gebühren eingespart.")
+                else:
+                    st.info(f"{asset}: Fee-Aware liegt aktuell {advantage:+.2f} € gegen Standard; Gebührenersparnis {saved:+.2f} €.")
+
+        hfg = fee_grid_history(3000)
+        if not hfg.empty:
+            st.markdown("### Kontoverlauf ab gleichem Startpunkt")
+            try:
+                ch = hfg.copy()
+                ch["timestamp"] = pd.to_datetime(ch["timestamp"], utc=True)
+                ch["Serie"] = ch["Coin"].astype(str) + " · " + ch["Variante"].astype(str)
+                piv = ch.pivot_table(index="timestamp", columns="Serie", values="Kontowert €", aggfunc="last")
+                if len(piv) > 1:
+                    st.line_chart(piv)
+            except Exception:
+                pass
+            st.download_button("⬇ Fee-Grid Verlauf CSV", hfg.to_csv(index=False).encode("utf-8-sig"), "fee_aware_grid_verlauf.csv", "text/csv", key="fg_download")
+
+        st.markdown("### Was Fee-Aware anders macht")
+        st.write("• gleiche z-Score-Grid-Zielstufen wie das normale V6-Grid")
+        st.write("• neue Exposition nur, wenn der Abstand zur 72h-EMA die geschätzten Hin-/Rückkosten plus Puffer übersteigt")
+        st.write("• Zieländerung muss zwei abgeschlossene Stunden bestehen")
+        st.write("• mindestens 3 Stunden und 0,70% Kursweg zwischen normalen Rebalances")
+        st.write("• Risk-off-Ausstiege bleiben sofort möglich")
+        st.warning("Shadow-/Paper-Test: Dieser Vergleich verändert weder BTC Grid noch ETH Grid und sendet keine echten Orders.")
 
 
 with tab2:
@@ -774,7 +873,7 @@ with tab4:
         st.success("Dashboard-Passwort ist als Umgebungsvariable gesetzt.")
     else:
         st.error("Noch kein `TRADING_DASHBOARD_PASSWORD` gesetzt. So nicht öffentlich ins Internet stellen.")
-    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.9 enthält weiterhin keinerlei echte Broker-Orderfunktion; der neue Live-Paper-Modus simuliert Orders ausschließlich mit Spielgeld.")
+    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.10 enthält weiterhin keinerlei echte Broker-Orderfunktion; der neue Live-Paper-Modus simuliert Orders ausschließlich mit Spielgeld.")
     st.markdown("### 24/7-Aktualisierung")
     worker = state_status().get("worker") or {}
     if worker:
@@ -801,4 +900,4 @@ with tab5:
         st.info("Noch kein Verlauf vorhanden. Der Cloud-Worker oder eine manuelle Auswertung legt ihn automatisch an.")
 
 st.markdown("---")
-st.caption("V6.9 Cloud bleibt reines Paper-Trading/Monitoring. Multi-Coin Live-Paper nutzt aktuelle Kurse, sendet aber keinerlei echte Orders.")
+st.caption("V6.10 Cloud bleibt reines Paper-Trading/Monitoring. Multi-Coin Live-Paper nutzt aktuelle Kurse, sendet aber keinerlei echte Orders.")
