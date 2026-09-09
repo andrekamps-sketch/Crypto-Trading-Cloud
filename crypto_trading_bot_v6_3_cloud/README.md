@@ -1,52 +1,83 @@
-# Crypto Trading Zentrale – V6.6 Signal-Labor
+# Crypto Trading Zentrale – V6.7 Strategy Challenger
 
-V6.6 ergänzt die bestehende Cloud-Zentrale um ein **rein beobachtendes Quality-Signal-Labor**. Die eingefrorenen V5.2-/V6-Regeln, Paper-Positionen, Telegram-Einstellungen und das Railway-Volume `/data` werden nicht verändert.
+V6.7 ergänzt die bestehende Cloud-Zentrale um einen **Strategy Challenger**. Neue Strategien laufen ausschließlich im Shadow-/Paper-Modus gegen einen eingefrorenen Champion. Die bestehenden V5.2-/V6-Forward-Tests, das Signal-Labor, Telegram und das Railway-Volume `/data` bleiben erhalten.
 
-## Neu in V6.6
+## Neu in V6.7
 
-- speichert 9/10- und 10/10-Quality-Signale automatisch
-- speichert Signalpreis, Edge, RSI, Marktphase und fehlende Regel
-- misst den Kurs danach automatisch bei ungefähr:
-  - 1 Stunde
-  - 6 Stunden
-  - 24 Stunden
-  - 3 Tagen
-  - 7 Tagen
-- führt pro Signal den bisher beobachteten maximalen Anstieg und Rückgang mit
-- trennt 9/10 und 10/10 in der Statistik
-- zeigt Trefferquote, Durchschnitt, Median, bestes und schlechtestes Ergebnis je Horizont
-- zeigt eine Coin-Auswertung nach 24 Stunden, sobald genügend Daten vorhanden sind
-- CSV-Export aller Signal-Labor-Daten
+Im neuen Tab **🏆 Strategy Challenger** kannst du eine neue Forward-Saison starten. Beim Start werden festgeschrieben:
 
-## Verhalten beim ersten V6.6-Lauf
+- Champion
+- Startzeitpunkt
+- Coin-Universum
+- Gebühren
+- Regeln der Challenger
+- Promotion-Kriterien
 
-Coins, die beim Update bereits auf 9/10 oder 10/10 stehen, werden einmalig als `baseline` gespeichert. Dadurch kann ihre weitere Kursentwicklung gemessen werden, ohne so zu tun, als wäre das Signal erst durch V6.6 neu entstanden. Spätere echte Übergänge werden als `transition` gespeichert.
+Bereits bekannte Kurse vor dem Start zählen nicht als Challenger-Trades.
 
-## Update der bestehenden Railway-App
+### Erste Shadow-Challenger
 
-Für ein bestehendes V6.5.2-System reicht der kleine Patch. Lade diese drei Dateien ins **Hauptverzeichnis** des GitHub-Repositories und ersetze die vorhandenen Dateien:
+**Quality 10/10 Strict**
+- Einstieg nur bei vollständigem 10/10-Quality-Setup
+- Edge mindestens 85
+- ein Coin gleichzeitig
+- 20 % Positionsgröße
+- Stop-Loss 4 %, Take-Profit 8 %
+- Trailing-Stop 3 % ab +5 %
 
-- `signal_lab.py` (neu)
+**Quality 9/10 Confirmed**
+- mindestens 9/10 Regeln
+- Edge mindestens 90
+- derselbe Kandidat muss zwei aufeinanderfolgende Cloud-Scans bestätigen
+- identische Risiko-/Exit-Grundregeln
+
+Beide Strategien verwenden nur neue Markt-Scans nach dem Challenge-Start.
+
+## Promotion-Regeln
+
+Eine Strategie bekommt erst **🏆 PROMOTION EMPFOHLEN**, wenn sie gleichzeitig:
+
+- mindestens 30 Tage Forward gelaufen ist
+- mindestens 8 abgeschlossene Trades hat
+- netto positiv ist
+- mindestens 2 Prozentpunkte vor dem Champion liegt
+- Profit Factor mindestens 1,20 erreicht
+- maximal 10 % Drawdown hat
+- alle Kriterien anschließend 72 Stunden ohne Unterbrechung erfüllt
+
+**Wichtig:** Es gibt keine automatische Umschaltung. Eine Promotion ist nur eine Empfehlung im Dashboard und per Telegram. Der Champion bleibt unverändert, bis du bewusst entscheidest.
+
+## Railway-Update von V6.6
+
+Für die bestehende Cloud-App reicht der Patch. Lade diese drei Dateien in das **Hauptverzeichnis** des GitHub-Repositories und ersetze vorhandene Dateien:
+
+- `strategy_challenger.py` (neu)
 - `worker.py`
 - `cloud_app.py`
 
 Danach Commit. Railway deployt automatisch neu.
 
-**Nicht löschen:** das Railway-Volume mit Mount Path `/data`. Dort liegen die laufenden Forward-Zustände, Telegram-Chat-ID und künftig auch die Signal-Labor-Daten.
+**Das Railway-Volume `/data` nicht löschen.** Dort liegen deine bestehenden Forward-States, Telegram-Chat-ID, Signal-Labor-Daten und künftig auch der Strategy-Challenger-State.
 
-Es sind **keine neuen Railway-Variablen** nötig.
+Es sind keine neuen Railway-Variablen nötig.
 
-## Wo finde ich das Labor?
+## Start der ersten Challenger-Saison
 
-In der Cloud-Zentrale gibt es nach dem Update den neuen Tab **🧪 Signal-Labor**. Der Worker aktualisiert es bei jedem automatischen Markt-Scan. Manuell kann der zuletzt gespeicherte Scan dort ebenfalls übernommen werden.
+Nach dem Deployment:
 
-## Dateien im Volume
+1. Cloud-Zentrale öffnen.
+2. Tab **🏆 Strategy Challenger** öffnen.
+3. Champion prüfen (standardmäßig `Quality Breakout`, falls verfügbar).
+4. Auf **Challenger-Saison ab jetzt einfrieren** drücken.
+5. Danach nichts an den eingefrorenen Regeln ändern.
 
-- `/data/signal_lab_events.json`
-- `/data/signal_lab_state.json`
+Der Cloud-Worker aktualisiert die Challenger anschließend automatisch mit jedem Markt-Scan. Wenn ein Challenger die Promotion-Regeln erfüllt, sendet die vorhandene Telegram-Verbindung eine Meldung.
 
-## Wichtig
+## Neue Dateien im Railway-Volume
 
-Die Statistik ist am Anfang zwangsläufig dünn. Ein einzelnes gutes 9/10-Signal beweist keinen Vorteil. Interessant wird das Labor erst mit einer größeren Zahl unabhängiger Signale über unterschiedliche Marktphasen.
+- `/data/strategy_challenger.json`
+- `/data/strategy_challenger_history.csv`
 
-V6.6 bleibt reines Paper-Trading/Monitoring und enthält keine echte Broker-Order-Ausführung.
+## Sicherheit
+
+V6.7 bleibt reines Paper-/Shadow-Trading. Es gibt weiterhin **keine echte Broker-Order-Ausführung** und keine automatische Promotion in Live-Trading.

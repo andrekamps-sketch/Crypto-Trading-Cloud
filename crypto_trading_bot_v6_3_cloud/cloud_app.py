@@ -17,8 +17,12 @@ from notifications import (
     clear_saved_chat_id, discover_chat_id, notification_log, build_daily_summary, process_notifications, send_telegram, settings as notification_settings, save_chat_id, validate_chat_id,
 )
 from signal_lab import coin_stats, events_dataframe, horizon_stats, lab_status, process_signal_lab
+from strategy_challenger import (
+    CANDIDATES, PROMOTION_RULES, challenge_history, challenge_state, challenge_table,
+    process_challenge, start_challenge,
+)
 
-TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.6 Cloud")
+TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.7 Cloud")
 PASSWORD = os.environ.get("TRADING_DASHBOARD_PASSWORD", "")
 
 st.set_page_config(page_title=TITLE, page_icon="☁️", layout="wide")
@@ -67,6 +71,8 @@ with st.sidebar:
     st.header("Cloud-Status")
     st.write(("✅" if status["v52"] else "⚪") + " V5.2 Forward-Wettkampf")
     st.write(("✅" if status["v6"] else "⚪") + " V6 Experimente")
+    ch_side = challenge_state()
+    st.write(("✅" if ch_side and ch_side.get("active") else "⚪") + " Strategy Challenger")
     worker = status.get("worker") or {}
     if worker:
         st.caption("Worker: " + ("✅ " if worker.get("ok") else "⚠️ ") + str(worker.get("message", "")))
@@ -98,7 +104,7 @@ def show_table(table: pd.DataFrame) -> None:
         d.metric("Tests mit Wert", str(len(avail)))
 
 
-tab0, tab1, tab_lab, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🧪 Signal-Labor", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
+tab0, tab1, tab_lab, tab_challenge, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🧪 Signal-Labor", "🏆 Strategy Challenger", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
 
 with tab0:
     st.subheader("Forward-Tests in der Cloud")
@@ -253,6 +259,110 @@ with tab_lab:
         st.info("Noch keine 9/10- oder 10/10-Signale gespeichert.")
 
 
+with tab_challenge:
+    st.subheader("🏆 Strategy Challenger")
+    st.caption("Neue Regeln laufen ausschließlich im Shadow-/Paper-Modus gegen einen eingefrorenen Champion. Eine Promotion wird nur empfohlen – niemals automatisch ausgeführt.")
+
+    ch_state = challenge_state()
+    live_table = latest_combined()
+    if not ch_state:
+        st.info("Noch keine Challenger-Saison gestartet. Beim Start werden Champion, Universum, Gebühren und Promotion-Regeln eingefroren. Bereits vorhandene Kurse vor dem Start werden nicht als Challenger-Trades verwendet.")
+        if live_table.empty:
+            st.warning("Noch keine Paper-Kontowerte vorhanden. Erst die Zentrale auswerten lassen.")
+        else:
+            available = live_table[pd.to_numeric(live_table.get("Kontowert €"), errors="coerce").notna()].copy()
+            champions = available["Strategie"].astype(str).tolist() if not available.empty else []
+            default_idx = champions.index("Quality Breakout") if "Quality Breakout" in champions else 0
+            champion_choice = st.selectbox("Champion", champions, index=default_idx if champions else 0, disabled=not champions)
+            v52_state_now = state_status().get("v52") or {}
+            frozen_assets = list(v52_state_now.get("assets") or ["BTC", "ETH", "SOL", "LINK", "AVAX"])
+            fee_pct = float(v52_state_now.get("fee_pct", 0.25) or 0.25)
+            st.write("**Eingefrorenes Coin-Universum:** " + ", ".join(frozen_assets))
+            st.write(f"**Simulierte Gebühr:** {fee_pct:.2f}%")
+            st.markdown("### Neue Shadow-Challenger")
+            for name, rules in CANDIDATES.items():
+                with st.container(border=True):
+                    st.markdown(f"**{name}**")
+                    st.caption(str(rules.get("description", "")))
+                    st.write(f"Entry: ≥{rules['min_rules']}/10 · Edge ≥{rules['min_edge']:.0f} · Bestätigungen {rules['confirm_scans']}")
+                    st.write(f"Risiko: 20% Allokation · SL {rules['stop_loss_pct']:.0f}% · TP {rules['take_profit_pct']:.0f}% · Trailing {rules['trailing_stop_pct']:.0f}% ab +{rules['trailing_activation_pct']:.0f}%")
+            with st.expander("Promotion-Regeln"):
+                st.write(f"Mindestens {PROMOTION_RULES['min_days']:.0f} Tage Forward-Laufzeit")
+                st.write(f"Mindestens {PROMOTION_RULES['min_completed_trades']} abgeschlossene Trades")
+                st.write(f"Mindestens +{PROMOTION_RULES['min_outperformance_pp']:.1f} Prozentpunkte vor dem Champion")
+                st.write(f"Profit Factor ≥ {PROMOTION_RULES['min_profit_factor']:.2f}")
+                st.write(f"Max. Drawdown ≤ {PROMOTION_RULES['max_drawdown_pct']:.1f}%")
+                st.write(f"Alle Kriterien müssen anschließend {PROMOTION_RULES['qualification_hold_hours']:.0f} Stunden stabil bleiben")
+            if champions and st.button("🏁 Challenger-Saison ab jetzt einfrieren", type="primary", use_container_width=True):
+                try:
+                    start_challenge(live_table, champion_choice, frozen_assets, 1000.0, fee_pct)
+                    st.success("Challenge gestartet. Die ersten Shadow-Trades dürfen erst mit einem neuen Markt-Scan nach diesem Zeitpunkt entstehen.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+    else:
+        started = pd.Timestamp(ch_state.get("started_at"))
+        try:
+            started_local = started.tz_convert("Europe/Berlin") if started.tzinfo else started
+        except Exception:
+            started_local = started
+        elapsed_days = max(0.0, (pd.Timestamp.now(tz="UTC") - (started.tz_convert("UTC") if started.tzinfo else started.tz_localize("UTC"))).total_seconds() / 86400.0)
+        a, b, c, d = st.columns(4)
+        a.metric("Champion", str(ch_state.get("champion", "–")))
+        b.metric("Laufzeit", f"{elapsed_days:.1f} Tage")
+        c.metric("Challenger", str(len(ch_state.get("challengers", {}))))
+        d.metric("Regeln", "🔒 eingefroren")
+        st.caption("Start: " + started_local.strftime("%d.%m.%Y %H:%M") + " · Universum: " + ", ".join(ch_state.get("assets", [])))
+
+        if st.button("🔄 Challenger mit letztem Scan aktualisieren", use_container_width=True):
+            try:
+                res = process_challenge(latest_combined(), read_json(MONITOR_LATEST, {}) or {})
+                st.success(str(res.get("message", "Aktualisiert")))
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+
+        ct = challenge_table(ch_state)
+        if not ct.empty:
+            st.dataframe(ct, use_container_width=True, hide_index=True)
+
+        last_metrics = ch_state.get("last_metrics") or {}
+        champ = last_metrics.get("champion") or {}
+        st.markdown("### Promotion-Prüfung")
+        for name, shadow in (ch_state.get("challengers") or {}).items():
+            m = (last_metrics.get("challengers") or {}).get(name) or {}
+            with st.container(border=True):
+                st.markdown(f"**{name}** · {m.get('status', shadow.get('last_status','🟡 BEOBACHTEN'))}")
+                x1, x2, x3, x4 = st.columns(4)
+                x1.metric("Netto seit Start", f"{float(m.get('return_pct',0)):+.2f}%")
+                x2.metric("Champion", f"{float(champ.get('return_pct',0)):+.2f}%")
+                x3.metric("Drawdown", f"{float(m.get('drawdown_pct',0)):.2f}%")
+                pfv = m.get("profit_factor", 0)
+                x4.metric("Profit Factor", "∞" if pfv == float('inf') else f"{float(pfv):.2f}")
+                for check in m.get("checks", []):
+                    st.caption(str(check))
+                pos = shadow.get("position") or {}
+                if pos:
+                    st.write(f"Offene Shadow-Position: **{pos.get('asset')}** · Einstieg {float(pos.get('entry_price',0)):,.4f} €")
+                else:
+                    st.write("Position: **Cash**")
+
+        hist_ch = challenge_history()
+        if not hist_ch.empty:
+            st.markdown("### Forward-Verlauf seit Challenge-Start")
+            try:
+                hv = hist_ch.copy()
+                hv["Kontowert €"] = pd.to_numeric(hv["Kontowert €"], errors="coerce")
+                piv = hv.pivot_table(index="timestamp", columns="Strategie", values="Kontowert €", aggfunc="last")
+                if len(piv) > 1:
+                    st.line_chart(piv)
+            except Exception:
+                pass
+            st.download_button("⬇ Challenger-Verlauf CSV", hist_ch.to_csv(index=False).encode("utf-8-sig"), "strategy_challenger_verlauf.csv", "text/csv")
+
+        st.warning("Eine Promotion ändert keine laufende Strategie automatisch. Selbst bei 'PROMOTION EMPFOHLEN' bleibt der Champion unverändert, bis du ausdrücklich entscheidest.")
+
+
 with tab2:
     st.subheader("📱 Handy-Kurzansicht")
     table = latest_combined()
@@ -283,7 +393,7 @@ with tab2:
 
 with tab3:
     st.subheader("🔔 Telegram-Benachrichtigungen")
-    st.caption("Optional: V6.6 meldet neue Paper-Trades mit G/V, getrennte 9/10- und 10/10-Quality-Signale, Führungswechsel und eine ausführlichere Tagesübersicht.")
+    st.caption("Optional: V6.7 meldet neue Paper-Trades mit G/V, getrennte 9/10- und 10/10-Quality-Signale, Führungswechsel und eine ausführlichere Tagesübersicht.")
     cfg = notification_settings()
     a, b, c = st.columns(3)
     a.metric("Bot-Token", "✅ gesetzt" if cfg["bot_token_set"] else "❌ fehlt")
@@ -312,7 +422,7 @@ with tab3:
                 st.error(str(exc))
 
         if col_test.button("🧪 Testnachricht senden", type="primary", use_container_width=True):
-            ok, msg = send_telegram("✅ Crypto Trading Zentrale V6.6: Telegram-Benachrichtigungen funktionieren.")
+            ok, msg = send_telegram("✅ Crypto Trading Zentrale V6.7: Telegram-Benachrichtigungen funktionieren.")
             if ok:
                 st.success(msg)
             else:
@@ -410,7 +520,7 @@ with tab4:
         st.success("Dashboard-Passwort ist als Umgebungsvariable gesetzt.")
     else:
         st.error("Noch kein `TRADING_DASHBOARD_PASSWORD` gesetzt. So nicht öffentlich ins Internet stellen.")
-    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.6 enthält aktuell überhaupt keine Order-Funktion.")
+    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.7 enthält aktuell überhaupt keine Order-Funktion.")
     st.markdown("### 24/7-Aktualisierung")
     worker = state_status().get("worker") or {}
     if worker:
@@ -437,4 +547,4 @@ with tab5:
         st.info("Noch kein Verlauf vorhanden. Der Cloud-Worker oder eine manuelle Auswertung legt ihn automatisch an.")
 
 st.markdown("---")
-st.caption("V6.6 Cloud ist weiterhin reines Paper-Trading/Monitoring. Es gibt keine automatische echte Order-Ausführung.")
+st.caption("V6.7 Cloud ist weiterhin reines Paper-Trading/Monitoring. Es gibt keine automatische echte Order-Ausführung.")

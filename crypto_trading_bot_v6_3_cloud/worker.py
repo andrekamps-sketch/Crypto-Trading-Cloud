@@ -7,8 +7,9 @@ from cloud_core import (
     evaluate_all, scan_market, write_json, read_json,
     WORKER_STATUS, V52_STATE, V6_STATE, V52_LATEST, V6_LATEST, MONITOR_LATEST,
 )
-from notifications import process_notifications
+from notifications import process_notifications, send_telegram
 from signal_lab import process_signal_lab
+from strategy_challenger import process_challenge
 
 MINUTES = max(15, int(os.environ.get("AUTO_UPDATE_MINUTES", "60")))
 SCAN_MARKET = os.environ.get("AUTO_MARKET_SCAN", "1").strip().lower() not in {"0", "false", "no"}
@@ -37,6 +38,12 @@ def cycle():
                 messages.append(f"Signal-Labor: {lab.get('total', 0)} Signale, +{lab.get('new_signals', 0)} neu")
         else:
             lab = process_signal_lab(monitor_payload) if monitor_payload else {"ok": False}
+
+        challenger = process_challenge(table, monitor_payload)
+        if challenger.get("active"):
+            messages.append("Strategy Challenger: " + str(challenger.get("message", "aktualisiert")))
+            for alert in challenger.get("events", []) or []:
+                send_telegram(alert)
 
         note = process_notifications(
             table,
