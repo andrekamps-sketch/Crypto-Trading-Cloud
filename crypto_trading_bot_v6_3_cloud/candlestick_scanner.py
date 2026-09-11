@@ -53,6 +53,8 @@ DEFAULTS = {
     "cooldown_hours": 6.0,
     "scan_interval_minutes": 15,
     "allow_short": True,
+    "one_position_per_coin": True,
+    "multi_tf_bonus": 5,
 }
 
 
@@ -137,7 +139,7 @@ def start_candlestick_paper(start_capital: float = 1000.0, **params) -> dict[str
 
     now = _utc_now().isoformat()
     s = {
-        "version": "7.2",
+        "version": "7.2.1",
         "mode": "CANDLESTICK_PAPER_ONLY",
         "started_at": now,
         "active": True,
@@ -466,6 +468,64 @@ def _scan_one(row: dict[str, Any], timeframe: str, cfg: dict[str, Any]) -> dict[
     )
 
 
+
+def _fmt_price(value: Any) -> str:
+    """Compact Telegram-friendly USDT price formatting without pretending USDT is EUR."""
+    x = _f(value)
+    if x >= 1000:
+        return f"{x:,.2f}"
+    if x >= 100:
+        return f"{x:.3f}"
+    if x >= 1:
+        return f"{x:.4f}"
+    if x >= 0.01:
+        return f"{x:.5f}"
+    if x >= 0.0001:
+        return f"{x:.7f}"
+    return f"{x:.10f}"
+
+
+def _prepare_trade_candidates(scan_rows: list[dict[str, Any]], s: dict[str, Any], cfg: dict[str, Any], seen: set[str]) -> list[dict[str, Any]]:
+    """Return at most one ranked setup per coin and add a small multi-timeframe confluence bonus."""
+    qualified = [
+        dict(x) for x in scan_rows
+        if bool(x.get("Bestätigt"))
+        and float(x.get("Score", 0)) >= float(cfg.get("min_score", DEFAULTS["min_score"]))
+        and str(x.get("signal_id")) not in seen
+    ]
+    by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for sig in qualified:
+        by_symbol.setdefault(str(sig.get("Symbol", "")), []).append(sig)
+
+    out: list[dict[str, Any]] = []
+    bonus_value = max(0, int(cfg.get("multi_tf_bonus", DEFAULTS["multi_tf_bonus"])))
+    for symbol, group in by_symbol.items():
+        if not symbol:
+            continue
+        group.sort(key=lambda x: (float(x.get("Score", 0)), float(x.get("24h Volumen $", 0))), reverse=True)
+        best = dict(group[0])
+        direction = str(best.get("Richtung", ""))
+        aligned = [x for x in group if str(x.get("Richtung", "")) == direction]
+        tfs = []
+        for x in aligned:
+            tf = str(x.get("Zeitrahmen", ""))
+            if tf and tf not in tfs:
+                tfs.append(tf)
+        base_score = int(float(best.get("Score", 0)))
+        bonus = bonus_value if len(tfs) >= 2 else 0
+        best["Basis-Score"] = base_score
+        best["Konfluenz-Bonus"] = bonus
+        best["Konfluenz-TFs"] = tfs
+        best["Score"] = min(100, base_score + bonus)
+        best["consumed_signal_ids"] = [str(x.get("signal_id")) for x in group if x.get("signal_id")]
+        if bonus:
+            best["Details"] = (str(best.get("Details", "")) + f" · Multi-TF +{bonus} ({' + '.join(tfs)})").strip(" ·")
+        out.append(best)
+
+    out.sort(key=lambda x: (float(x.get("Score", 0)), float(x.get("24h Volumen $", 0))), reverse=True)
+    return out
+
+
 def _equity(s: dict[str, Any], prices: dict[str, float]) -> tuple[float, float]:
     cash = float(s.get("cash", 0.0))
     total = cash
@@ -514,7 +574,8 @@ def _close_position(s: dict[str, Any], key: str, market_price: float, reason: st
         "signal_id": pos.get("signal_id", ""),
     }
     _append_csv(CANDLE_TRADES, event)
-    event["telegram"] = f"🕯️ Candlestick {direction} geschlossen · {pos['coin']}/{pos['timeframe']} · {reason} · Netto {net_pnl:+.2f} €"
+    event["telegram"] = (f"🕯️ Candlestick {direction} geschlossen · {pos['coin']}/{pos['timeframe']} · {reason}\n"
+                         f"Entry {_fmt_price(entry)} → Exit {_fmt_price(exit_price)} USDT · Netto {net_pnl:+.2f} €")
     return event
 
 
@@ -549,7 +610,8 @@ def _open_position(s: dict[str, Any], sig: dict[str, Any], prices: dict[str, flo
     s["trade_count"] = int(s.get("trade_count", 0)) + 1
     s.setdefault("positions", {})[key] = {
         "coin": sig["Coin"], "symbol": symbol, "timeframe": sig["Zeitrahmen"], "direction": direction,
-        "pattern": sig["Muster"], "score": int(sig["Score"]), "signal_id": sig["signal_id"],
+        "pattern": sig["Muster"], "score": int(sig["Score"]), "base_score": int(sig.get("Basis-Score", sig["Score"])), "signal_id": sig["signal_id"],
+        "confluence_bonus": int(sig.get("Konfluenz-Bonus", 0) or 0), "confluence_timeframes": list(sig.get("Konfluenz-TFs", []) or []),
         "entry_price": entry, "signal_price": float(sig["Preis $"]), "last_price": current,
         "stop_price": stop, "target_price": target, "notional_eur": notional,
         "entry_fee_eur": entry_fee, "opened_at": now.isoformat(), "risk_pct": risk_pct * 100.0,
@@ -558,12 +620,27 @@ def _open_position(s: dict[str, Any], sig: dict[str, Any], prices: dict[str, flo
     event = {
         "timestamp": now.isoformat(), "action": "OPEN", "Coin": sig["Coin"], "Symbol": symbol,
         "Zeitrahmen": sig["Zeitrahmen"], "Richtung": direction, "Muster": sig["Muster"], "Score": sig["Score"],
+        "base_score": sig.get("Basis-Score", sig["Score"]), "confluence_bonus": sig.get("Konfluenz-Bonus", 0),
+        "confluence_timeframes": "+".join(sig.get("Konfluenz-TFs", []) or []),
         "entry_price": round(entry, 10), "exit_price": None, "notional_eur": round(notional, 6),
         "entry_fee_eur": round(entry_fee, 6), "exit_fee_eur": 0.0, "gross_pnl_eur": 0.0, "net_pnl_eur": -round(entry_fee, 6),
         "reason": f"Score {sig['Score']}/100 · bestätigt", "signal_id": sig["signal_id"],
     }
     _append_csv(CANDLE_TRADES, event)
-    event["telegram"] = f"🕯️ Candlestick {direction} · {sig['Coin']}/{sig['Zeitrahmen']} · {sig['Muster']} · Score {sig['Score']}/100 · Paper {notional:.0f} €"
+    tf_list = list(sig.get("Konfluenz-TFs", []) or [])
+    tf_label = " + ".join(tf_list) if len(tf_list) >= 2 else str(sig["Zeitrahmen"])
+    base_score = int(sig.get("Basis-Score", sig["Score"]))
+    bonus = int(sig.get("Konfluenz-Bonus", 0) or 0)
+    score_text = f"Score {int(sig['Score'])}/100"
+    if bonus:
+        score_text += f" (Basis {base_score} +{bonus} Multi-TF)"
+    event["telegram"] = (
+        f"🕯️ Candlestick {direction} · {sig['Coin']}/{tf_label}\n"
+        f"{sig['Muster']} · {score_text}\n"
+        f"Einstieg {_fmt_price(entry)} USDT\n"
+        f"🛑 Stop {_fmt_price(stop)} · 🎯 Ziel {_fmt_price(target)} USDT\n"
+        f"CRV {float(cfg['reward_risk']):.1f}:1 · Paper {notional:.0f} €"
+    )
     return event
 
 
@@ -610,7 +687,10 @@ def process_candlestick_paper(force_scan: bool = False) -> dict[str, Any]:
     s = state()
     if not s or not s.get("active", True):
         return {"active": False, "message": "Candlestick-Paper nicht aktiv", "events": [], "state": s}
-    cfg = s.get("params") or dict(DEFAULTS)
+    cfg = dict(DEFAULTS)
+    cfg.update(s.get("params") or {})
+    s["params"] = cfg
+    s["version"] = "7.2.1"
     now = _utc_now()
     events: list[dict[str, Any]] = []
     scan_rows: list[dict[str, Any]] = []
@@ -651,16 +731,17 @@ def process_candlestick_paper(force_scan: bool = False) -> dict[str, Any]:
 
     if not s.get("entry_paused", False) and scan_rows and len(s.get("positions", {})) < int(cfg["max_positions"]):
         seen = set(map(str, s.get("seen_signals", []) or []))
-        candidates = [
-            x for x in scan_rows
-            if bool(x.get("Bestätigt")) and float(x.get("Score", 0)) >= float(cfg["min_score"])
-            and str(x.get("signal_id")) not in seen
-        ]
-        candidates.sort(key=lambda x: (float(x.get("Score", 0)), float(x.get("24h Volumen $", 0))), reverse=True)
+        candidates = _prepare_trade_candidates(scan_rows, s, cfg, seen)
         for sig in candidates:
             if len(s.get("positions", {})) >= int(cfg["max_positions"]):
                 break
-            cooldown_key = f"{sig['Symbol']}|{sig['Zeitrahmen']}|{sig['Richtung']}"
+            symbol = str(sig["Symbol"])
+            # V7.2.1: never add a second live paper position in the same coin,
+            # even if another timeframe has its own valid signal.
+            if bool(cfg.get("one_position_per_coin", True)):
+                if any(str(p.get("symbol", "")) == symbol for p in (s.get("positions") or {}).values()):
+                    continue
+            cooldown_key = f"{symbol}|{sig['Zeitrahmen']}|{sig['Richtung']}"
             cd = (s.get("cooldown_until") or {}).get(cooldown_key)
             if cd:
                 try:
@@ -668,11 +749,12 @@ def process_candlestick_paper(force_scan: bool = False) -> dict[str, Any]:
                         continue
                 except Exception:
                     pass
-            pos_key = cooldown_key
-            if pos_key in (s.get("positions") or {}):
-                continue
             e = _open_position(s, sig, prices, now)
-            seen.add(str(sig["signal_id"]))
+            # Consume all same-coin signals from this scan, so another timeframe
+            # cannot be opened later from the very same stale scan.
+            for sid in sig.get("consumed_signal_ids", []) or [sig.get("signal_id")]:
+                if sid:
+                    seen.add(str(sid))
             if e:
                 events.append(e)
         s["seen_signals"] = list(seen)[-3000:]
@@ -712,7 +794,8 @@ def positions_dataframe(s: dict[str, Any] | None = None) -> pd.DataFrame:
         pnl_pct = side * (cur / entry - 1.0) * 100.0 if entry > 0 else 0.0
         rows.append({
             "Coin": pos.get("coin"), "TF": pos.get("timeframe"), "Richtung": pos.get("direction"), "Muster": pos.get("pattern"),
-            "Score": pos.get("score"), "Paper €": round(float(pos.get("notional_eur", 0.0)), 2),
+            "Score": pos.get("score"), "Konfluenz": " + ".join(pos.get("confluence_timeframes", []) or []),
+            "Paper €": round(float(pos.get("notional_eur", 0.0)), 2),
             "Entry $": round(entry, 10), "Aktuell $": round(cur, 10), "G/V %": round(pnl_pct, 2),
             "Stop $": round(float(pos.get("stop_price", 0.0)), 10), "Ziel $": round(float(pos.get("target_price", 0.0)), 10),
             "Risiko %": round(float(pos.get("risk_pct", 0.0)), 2), "Seit": pos.get("opened_at"),
@@ -778,7 +861,7 @@ def leaderboard_row() -> dict[str, Any] | None:
     equity = float(s.get("equity", start))
     ret = (equity / start - 1.0) * 100.0 if start > 0 else 0.0
     return {
-        "System": "V7.2", "Strategie": "Coin Candlestick Scanner", "Status": "läuft" if s.get("active", True) else "pausiert",
+        "System": "V7.2.1", "Strategie": "Coin Candlestick Scanner", "Status": "läuft" if s.get("active", True) else "pausiert",
         "Kontowert €": round(equity, 2), "Rendite %": round(ret, 2), "Drawdown %": round(float(s.get("max_drawdown_pct", 0.0)), 2),
         "PF": None, "Trades": int(s.get("closed_trades", 0)), "Gebühren €": round(float(s.get("fees_total", 0.0)), 2),
         "Hinweis": f"{len(s.get('positions', {}))} offen · Score ≥ {float((s.get('params') or DEFAULTS).get('min_score',75)):.0f}",

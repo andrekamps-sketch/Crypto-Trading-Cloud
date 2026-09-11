@@ -51,7 +51,7 @@ from candlestick_scanner import (
     stop_candlestick_paper, trades_dataframe as candle_trades,
 )
 
-TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V7.2 Candlestick")
+TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V7.2.1 Candlestick")
 PASSWORD = os.environ.get("TRADING_DASHBOARD_PASSWORD", "")
 
 st.set_page_config(page_title=TITLE, page_icon="☁️", layout="wide")
@@ -856,15 +856,15 @@ with tab_feegrid:
 
 
 with tab_candle:
-    st.subheader("🕯️ Coin Candlestick Scanner V7.2")
-    st.caption("Dynamischer Paper-Scanner für die liquidesten USDT-Coins. 15m + 1h · bestätigte Kerzensignale · Score 0–100 · ATR-Stop · 2R-Ziel. Keine echten Orders.")
+    st.subheader("🕯️ Coin Candlestick Scanner V7.2.1")
+    st.caption("Dynamischer Paper-Scanner für die liquidesten USDT-Coins. 15m + 1h · max. 1 Position je Coin · Multi-TF-Konfluenzbonus · Score 0–100 · ATR-Stop · 2R-Ziel. Keine echten Orders.")
     cs = candlestick_state()
     if not cs:
         c1, c2, c3 = st.columns(3)
         start_cap_cs = c1.number_input("Virtuelles Startkapital €", min_value=100.0, value=float(CANDLE_DEFAULTS["start_capital"]), step=100.0, key="cs_startcap")
         min_score_cs = c2.slider("Mindest-Score", 60, 95, int(CANDLE_DEFAULTS["min_score"]), 1, key="cs_score")
         risk_cs = c3.number_input("Risiko je Trade %", min_value=0.10, max_value=2.00, value=float(CANDLE_DEFAULTS["risk_per_trade_pct"]), step=0.05, key="cs_risk")
-        st.info("Start-Setup: Top 50 liquide USDT-Märkte · Spread ≤ 25 bps · mindestens 5 Mio. $ 24h-Volumen · max. 3 Positionen · 1x Paper Long/Short.")
+        st.info("Start-Setup: Top 50 liquide USDT-Märkte · Spread ≤ 25 bps · mindestens 5 Mio. $ 24h-Volumen · max. 3 Positionen · max. 1 Position je Coin · 1x Paper Long/Short.")
         if st.button("▶ Candlestick-Paper mit 1.000-€-Logik starten", type="primary", key="cs_start"):
             try:
                 start_candlestick_paper(start_capital=float(start_cap_cs), min_score=float(min_score_cs), risk_per_trade_pct=float(risk_cs))
@@ -956,10 +956,11 @@ with tab_candle:
         else:
             st.dataframe(pst_cs, use_container_width=True, hide_index=True)
 
-        with st.expander("Score- und Risiko-Regeln V7.2"):
+        with st.expander("Score- und Risiko-Regeln V7.2.1"):
             st.write("• Muster bis 20 Punkte · Trend 20 · Support/Widerstand 20 · Volumen 15 · RSI/Momentum 10 · Bestätigung 10 · CRV 5")
             st.write(f"• Einstieg erst ab {float(cfg_cs.get('min_score',75)):.0f}/100 und nur wenn die nächste abgeschlossene Kerze Signal-Hoch/-Tief bestätigt")
             st.write(f"• Risiko je Trade {float(cfg_cs.get('risk_per_trade_pct',0.75)):.2f}% · max. {int(cfg_cs.get('max_positions',3))} Positionen · max. {float(cfg_cs.get('max_position_pct',30)):.0f}% je Position")
+            st.write(f"• Maximal 1 offene Position je Coin; stimmen 15m und 1h in derselben Richtung überein, bekommt das stärkste Setup +{int(cfg_cs.get('multi_tf_bonus',5))} Score-Punkte statt eines zweiten Trades")
             st.write(f"• Stop hinter Signal-Kerze bzw. mindestens {float(cfg_cs.get('atr_stop_mult',1.5)):.1f}× ATR · Ziel {float(cfg_cs.get('reward_risk',2.0)):.1f}:1")
             st.write(f"• Gebühren {float(cfg_cs.get('fee_pct',0.10)):.2f}% je Ausführung + {float(cfg_cs.get('slippage_pct',0.05)):.2f}% simulierte Slippage")
         st.warning("Nur Paper-Trading. SHORT bedeutet eine 1x simulierte Short-Position; es werden keine Futures, Hebel, API-Keys oder echten Orders verwendet.")
