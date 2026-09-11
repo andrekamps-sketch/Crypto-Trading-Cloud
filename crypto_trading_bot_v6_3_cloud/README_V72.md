@@ -1,34 +1,18 @@
-# V7.2 – Coin Candlestick Scanner
+# Crypto Trading Zentrale V7.2 – Candlestick V2 Quality Filter
 
-V7.2 erweitert die bestehende Cloud-Trading-Zentrale um eine eigenständige Paper-Strategie `Coin Candlestick Scanner`.
+V7.2 baut auf V7.1 auf und ergänzt einen neuen Candlestick-Paper-Bot mit strengen Qualitätsregeln.
 
-## Was neu ist
-- dynamisches Universum: Top 50 liquide Binance-USDT-Spotmärkte
-- Mindestliquidität: 5 Mio. USDT 24h-Quote-Volumen
-- Spread-Filter: maximal 25 Basispunkte
-- Zeitrahmen: 15 Minuten und 1 Stunde
-- Muster: Bullish/Bearish Engulfing, Hammer, Shooting Star, Bullish/Bearish Pin Bar, Morning Star, Evening Star
-- nur abgeschlossene Kerzen; Einstieg erst nach Bestätigung durch die folgende abgeschlossene Kerze
-- Score 0–100: Muster 20, Trend 20, Support/Widerstand 20, Volumen 15, RSI/Momentum 10, Bestätigung 10, CRV 5
-- Standard-Einstieg ab Score 75
-- virtuelles Startkapital 1.000 EUR
-- Risiko pro Trade 0,75 Prozent
-- maximal 3 parallele Positionen, maximal 30 Prozent Paper-Notional pro Position und 75 Prozent Gesamt-Exposure
-- ATR-/Signal-Kerzen-Stop und 2:1 Chance/Risiko-Ziel
-- simulierte Kosten: 0,10 Prozent Gebühr je Ausführung plus 0,05 Prozent Slippage
-- LONG und 1x-Paper-SHORT ohne Hebel und ohne echte Orders
-- Telegram-Hinweise bei simuliertem Einstieg/Ausstieg
-- Dashboard-Tab mit Signalen, offenen Positionen, Trades, Kontoverlauf und Auswertung nach Muster/Zeitrahmen/Richtung
-- Aufnahme in die zentrale Strategie-Rangliste
+## Neue Schutzregeln
+- Nur eine Candlestick-Position je Coin über alle Timeframes.
+- 15m-Signale nur mit bestätigtem 1h-Trend; 1h-Signale nur mit bestätigtem 4h-Trend.
+- Kerzenmuster + EMA20/EMA50 + Higher-Timeframe + RSI/Volumen ergeben einen Quality-Score; Einstieg erst ab 6/8.
+- 6 Stunden Cooldown nach Stop-Loss im selben Coin.
+- ATR-basierter Stop, Take-Profit 2R, Break-even-Schutz nach +1R.
+- Verlustbudget standardmäßig ca. 2,50 € je Trade bei 1.000 € Testkonto einschließlich angenäherter Gebühren.
+- Volatile/kleinere Märkte bekommen nur 50% Risikobudget, mittlere 75%.
+- Maximal 3 offene Candlestick-Positionen und max. 20% Notional je Trade.
 
-## Automatischer Start
-Ist noch kein Candlestick-State in `/data` vorhanden, startet der Worker die neue Paper-Strategie automatisch mit 1.000 EUR. Das lässt sich mit `CANDLESTICK_AUTO_START=0` abschalten.
+## Wichtig
+V7.2 ist ausschließlich Paper-Trading. Es gibt keinen Broker-Login und keine echten Orders.
 
-## Daten und Sicherheit
-Der Scanner nutzt nur öffentliche Binance-Marktdaten. Es werden keine Binance-API-Keys, Broker-Zugangsdaten oder Order-Berechtigungen benötigt. Alle Trades sind Simulationen. USDT-Kursbewegungen werden prozentual auf das virtuelle EUR-Notional übertragen; es findet keine echte EUR/USDT-Konvertierung statt.
-
-## Dateien
-- `candlestick_scanner.py`: Scanner, Scoring, Positions- und Risiko-Logik
-- `worker.py`: automatischer 5-Minuten-Zyklus; tiefer Candlestick-Scan maximal alle 15 Minuten
-- `cloud_app.py`: neuer Tab `🕯️ Candlestick`
-- `cloud_core.py`: Candlestick-Strategie in der zentralen Rangliste
+Nach dem Deploy im Dashboard den Tab **🕯️ Candlestick V2** öffnen und den neuen Test starten. Alte Candlestick-State-Dateien werden nicht gelöscht.

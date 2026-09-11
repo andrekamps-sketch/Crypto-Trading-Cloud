@@ -1,0 +1,16 @@
+CRYPTO TRADING ZENTRALE V7.2 – KURZUPDATE
+
+Neu: Candlestick V2 Quality Filter.
+
+Empfohlen bei einem bestehenden V7.1-Projekt:
+1. candlestick_quality.py neu hochladen.
+2. worker.py ersetzen.
+3. cloud_app.py ersetzen.
+4. README_V72.md optional hochladen.
+5. Railway deployen lassen. Das /data-Volume NICHT löschen.
+6. Dashboard -> 🕯️ Candlestick V2 -> neuen Test starten.
+
+Wenn dein GitHub-Stand bereits einen separaten Candlestick-V1-Code enthält, sichere ihn vorher.
+V7.2 verwendet eigene Dateien candlestick_v2_state.json / candlestick_v2_trades.json und löscht alte State-Dateien nicht.
+
+Paper-Trading בלבד – keine echten Orders.

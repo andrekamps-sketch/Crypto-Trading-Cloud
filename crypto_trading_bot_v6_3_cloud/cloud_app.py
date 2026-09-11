@@ -39,19 +39,17 @@ from fee_aware_grid import (
     process_fee_grid, result_dataframe as fee_grid_results, resume_fee_grid,
     start_fee_grid, state as fee_grid_state, stop_fee_grid,
 )
+from candlestick_quality import (
+    DEFAULTS as CANDLE_V2_DEFAULTS, latest as candle_v2_latest, positions_dataframe as candle_v2_positions,
+    process_candlestick_v2, resume_candlestick_v2, start_candlestick_v2, state as candle_v2_state,
+    stop_candlestick_v2, trades_dataframe as candle_v2_trades,
+)
 from crypto_radar import (
     build_new_alerts as radar_build_alerts, history_dataframe as radar_history,
     latest as radar_latest, rows_dataframe as radar_rows, scan_crypto_radar, status as radar_status,
 )
-from candlestick_scanner import (
-    DEFAULTS as CANDLE_DEFAULTS, history_dataframe as candle_history, latest as candle_latest,
-    pattern_stats as candle_pattern_stats, positions_dataframe as candle_positions,
-    process_candlestick_paper, resume_candlestick_paper, set_entry_paused as set_candle_entry_paused,
-    signals_dataframe as candle_signals, start_candlestick_paper, state as candlestick_state,
-    stop_candlestick_paper, trades_dataframe as candle_trades,
-)
 
-TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V7.2.1 Candlestick")
+TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V7.2 Quality")
 PASSWORD = os.environ.get("TRADING_DASHBOARD_PASSWORD", "")
 
 st.set_page_config(page_title=TITLE, page_icon="☁️", layout="wide")
@@ -93,7 +91,7 @@ def auth_gate() -> None:
 auth_gate()
 
 st.title("☁️ " + TITLE)
-st.caption("Cloud-/Handy-Zentrale mit Paper-Tests, Live-Paper, Crypto-Radar und Coin-Candlestick-Scanner. Keine echten Broker-Orders und keine Live-Trading-Berechtigung.")
+st.caption("Cloud-/Handy-Zentrale mit Paper-Tests, Live-Paper und breitem Crypto-Radar. Keine echten Broker-Orders und keine Live-Trading-Berechtigung.")
 
 status = state_status()
 with st.sidebar:
@@ -108,8 +106,8 @@ with st.sidebar:
     st.write(("✅" if ls_side and ls_side.get("active") else "⚪") + " Live-Paper Long+Short")
     fg_side = fee_grid_state()
     st.write(("✅" if fg_side and fg_side.get("active") else "⚪") + " Fee-Aware Grid Vergleich")
-    cs_side = candlestick_state()
-    st.write(("✅" if cs_side and cs_side.get("active") else "⚪") + " Coin Candlestick Scanner")
+    cv2_side = candle_v2_state()
+    st.write(("✅" if cv2_side and cv2_side.get("active") else "⚪") + " Candlestick V2 Quality")
     radar_side = radar_status()
     st.write(("✅" if radar_side.get("available") else "⚪") + " Crypto Opportunity Radar")
     worker = status.get("worker") or {}
@@ -143,7 +141,7 @@ def show_table(table: pd.DataFrame) -> None:
         d.metric("Tests mit Wert", str(len(avail)))
 
 
-tab0, tab1, tab_radar, tab_lab, tab_challenge, tab_live, tab_ls, tab_feegrid, tab_candle, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🌐 Crypto-Radar", "🧪 Signal-Labor", "🏆 Strategy Challenger", "🎮 Live-Paper", "↕️ Long+Short", "💸 Fee-Grid", "🕯️ Candlestick", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
+tab0, tab1, tab_radar, tab_lab, tab_challenge, tab_live, tab_ls, tab_feegrid, tab_candle, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🌐 Crypto-Radar", "🧪 Signal-Labor", "🏆 Strategy Challenger", "🎮 Live-Paper", "↕️ Long+Short", "💸 Fee-Grid", "🕯️ Candlestick V2", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
 
 with tab0:
     st.subheader("Forward-Tests in der Cloud")
@@ -856,114 +854,72 @@ with tab_feegrid:
 
 
 with tab_candle:
-    st.subheader("🕯️ Coin Candlestick Scanner V7.2.1")
-    st.caption("Dynamischer Paper-Scanner für die liquidesten USDT-Coins. 15m + 1h · max. 1 Position je Coin · Multi-TF-Konfluenzbonus · Score 0–100 · ATR-Stop · 2R-Ziel. Keine echten Orders.")
-    cs = candlestick_state()
-    if not cs:
-        c1, c2, c3 = st.columns(3)
-        start_cap_cs = c1.number_input("Virtuelles Startkapital €", min_value=100.0, value=float(CANDLE_DEFAULTS["start_capital"]), step=100.0, key="cs_startcap")
-        min_score_cs = c2.slider("Mindest-Score", 60, 95, int(CANDLE_DEFAULTS["min_score"]), 1, key="cs_score")
-        risk_cs = c3.number_input("Risiko je Trade %", min_value=0.10, max_value=2.00, value=float(CANDLE_DEFAULTS["risk_per_trade_pct"]), step=0.05, key="cs_risk")
-        st.info("Start-Setup: Top 50 liquide USDT-Märkte · Spread ≤ 25 bps · mindestens 5 Mio. $ 24h-Volumen · max. 3 Positionen · max. 1 Position je Coin · 1x Paper Long/Short.")
-        if st.button("▶ Candlestick-Paper mit 1.000-€-Logik starten", type="primary", key="cs_start"):
-            try:
-                start_candlestick_paper(start_capital=float(start_cap_cs), min_score=float(min_score_cs), risk_per_trade_pct=float(risk_cs))
-                with st.spinner("Erster Coin-Scan läuft …"):
-                    process_candlestick_paper(force_scan=True)
-                st.success("Candlestick-Scanner gestartet.")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Start fehlgeschlagen: {exc}")
+    st.subheader("🕯️ Candlestick V2 · Quality Filter")
+    st.caption("Strenge Paper-Strategie: eine Position je Coin über alle Zeitfenster, Higher-Timeframe-Bestätigung, Quality-Score, 6h Stop-Loss-Cooldown und risikobasierte Positionsgröße. Keine echten Orders.")
+    cv2 = candle_v2_state()
+    if not cv2:
+        a,b,c = st.columns(3)
+        cap = a.number_input("Testkapital (€)", min_value=100.0, value=float(CANDLE_V2_DEFAULTS["start_capital"]), step=100.0, key="cv2_cap")
+        risk = b.number_input("Max. Verlustbudget/Trade (€)", min_value=0.5, max_value=20.0, value=float(CANDLE_V2_DEFAULTS["risk_budget_eur"]), step=0.5, key="cv2_risk")
+        fee = c.number_input("Gebühr je Order (%)", min_value=0.0, max_value=1.0, value=float(CANDLE_V2_DEFAULTS["fee_pct"]), step=0.01, key="cv2_fee")
+        st.write("**V2-Regeln:** 15m braucht 1h-Trend · 1h braucht 4h-Trend · CRV 2:1 · max. 3 Positionen · max. 20% Notional pro Trade · volatile Coins nur 50% Risikobudget.")
+        if st.button("🕯️ Candlestick V2 ab jetzt starten", type="primary", use_container_width=True, key="cv2_start"):
+            start_candlestick_v2({"start_capital": float(cap), "risk_budget_eur": float(risk), "fee_pct": float(fee)}, reset=True)
+            st.success("Candlestick V2 gestartet. Alte Candlestick-Dateien werden nicht gelöscht.")
+            st.rerun()
     else:
-        cfg_cs = cs.get("params") or CANDLE_DEFAULTS
-        start_cs = float(cfg_cs.get("start_capital", 1000.0))
-        equity_cs = float(cs.get("equity", start_cs))
-        ret_cs = (equity_cs / start_cs - 1.0) * 100.0 if start_cs > 0 else 0.0
-        closed_cs = int(cs.get("closed_trades", 0))
-        wins_cs = int(cs.get("wins", 0))
-        winrate_cs = wins_cs / closed_cs * 100.0 if closed_cs else 0.0
-        a, b, c, d, e = st.columns(5)
-        a.metric("Kontowert", f"{equity_cs:,.2f} €", f"{ret_cs:+.2f} %")
-        b.metric("Offene Positionen", str(len(cs.get("positions", {}))))
-        c.metric("Abgeschl. Trades", str(closed_cs))
-        d.metric("Trefferquote", f"{winrate_cs:.1f} %" if closed_cs else "–")
-        e.metric("Gebühren", f"{float(cs.get('fees_total',0)):.2f} €")
+        cfg = {**CANDLE_V2_DEFAULTS, **(cv2.get("config") or {})}
+        latest_cv2 = candle_v2_latest()
+        stats = cv2.get("stats", {}) or {}
+        a,b,c,d,e = st.columns(5)
+        a.metric("Kontostand", f"{float(cv2.get('balance', cfg['start_capital'])):,.2f} €")
+        b.metric("Offen", str(len(cv2.get("positions", {}) or {})))
+        c.metric("Netto P/L", f"{float(stats.get('net_pnl',0)):+.2f} €")
+        d.metric("W / L", f"{int(stats.get('wins',0))} / {int(stats.get('losses',0))}")
+        e.metric("Gebühren", f"{float(stats.get('fees',0)):.2f} €")
 
-        x1, x2, x3 = st.columns(3)
-        if cs.get("active", True):
-            if x1.button("⏹ Scanner stoppen", use_container_width=True, key="cs_stop"):
-                stop_candlestick_paper(); st.rerun()
-        else:
-            if x1.button("▶ Scanner fortsetzen", use_container_width=True, key="cs_resume"):
-                resume_candlestick_paper(); st.rerun()
-        if cs.get("entry_paused", False):
-            if x2.button("▶ Neue Einstiege erlauben", use_container_width=True, key="cs_unpause"):
-                set_candle_entry_paused(False); st.rerun()
-        else:
-            if x2.button("⏸ Neue Einstiege pausieren", use_container_width=True, key="cs_pause"):
-                set_candle_entry_paused(True); st.rerun()
-        if x3.button("🔎 Jetzt 50 Coins scannen", use_container_width=True, key="cs_scan"):
+        x,y,z = st.columns(3)
+        if x.button("🔄 V2 jetzt prüfen", type="primary", use_container_width=True, key="cv2_run"):
             try:
-                with st.spinner("Liquideste USDT-Coins werden auf 15m und 1h geprüft …"):
-                    res_cs = process_candlestick_paper(force_scan=True)
-                for ev in res_cs.get("events", []) or []:
-                    txt = str(ev.get("telegram", "")).strip()
+                res = process_candlestick_v2()
+                sent = 0
+                for event in res.get("events", []) or []:
+                    txt = str(event.get("telegram", "")).strip()
                     if txt:
-                        send_telegram(txt)
-                st.success(str(res_cs.get("message", "Scan abgeschlossen")))
+                        ok, _ = send_telegram(txt); sent += int(ok)
+                st.success(str(res.get("message", "aktualisiert")) + (f" · Telegram {sent}" if sent else ""))
                 st.rerun()
             except Exception as exc:
-                st.error(f"Scan fehlgeschlagen: {exc}")
-
-        st.markdown("### Offene Candlestick-Positionen")
-        pos_cs = candle_positions(cs)
-        if pos_cs.empty:
-            st.info("Aktuell keine Position. Der Scanner wartet auf ein bestätigtes Setup ab dem Mindest-Score.")
+                st.error(str(exc))
+        if cv2.get("active", False):
+            if y.button("⏹ V2 stoppen", use_container_width=True, key="cv2_stop"):
+                stop_candlestick_v2(); st.rerun()
         else:
-            st.dataframe(pos_cs, use_container_width=True, hide_index=True)
+            if y.button("▶ V2 fortsetzen", use_container_width=True, key="cv2_resume"):
+                resume_candlestick_v2(); st.rerun()
+        if z.button("🆕 V2 sauber neu starten", use_container_width=True, key="cv2_reset"):
+            start_candlestick_v2(cfg, reset=True); st.rerun()
 
-        latest_cs = candle_latest()
-        st.markdown("### Aktuelle Signale")
-        if latest_cs:
-            q_cs = int(latest_cs.get("qualified", 0) or 0)
-            st.caption(f"Letzter Scan: {latest_cs.get('evaluated_at','–')} · {latest_cs.get('universe_size',0)} Coins tief geprüft · {q_cs} bestätigte Setups ab Score {float(cfg_cs.get('min_score',75)):.0f}.")
-        sig_cs = candle_signals(100)
-        if sig_cs.empty:
-            st.info("Im letzten Scan wurde keine der überwachten Kerzenformationen erkannt.")
-        else:
-            st.dataframe(sig_cs, use_container_width=True, hide_index=True)
-            st.download_button("⬇ Candlestick-Signale CSV", sig_cs.to_csv(index=False).encode("utf-8-sig"), "candlestick_signale.csv", "text/csv", key="cs_signal_download")
+        st.markdown("### Quality-Regeln")
+        st.write("• **Nie zwei Candlestick-Trades im selben Coin** – 15m und 1h sperren sich gegenseitig.")
+        st.write("• **15m LONG/SHORT nur mit passendem 1h-Trend; 1h nur mit passendem 4h-Trend.**")
+        st.write("• Kerzenmuster + EMA20/50-Trend + Higher-TF + RSI/Volumen müssen zusammen mindestens **6/8 Quality-Punkte** erreichen.")
+        st.write("• Nach einem echten Stop-Loss gilt für den Coin **6 Stunden Cooldown**.")
+        st.write("• Stop basiert auf ATR; Take-Profit liegt bei **2R**. Nach +1R wird der Stop ungefähr auf Gebühren-Break-even gezogen.")
+        st.write(f"• Normales Verlustbudget ca. **{float(cfg['risk_budget_eur']):.2f} €** je Trade; volatile Coins erhalten nur 50%, mittlere 75%.")
 
-        hist_cs = candle_history(3000)
-        if not hist_cs.empty:
-            st.markdown("### Kontoverlauf")
-            try:
-                ch_cs = hist_cs.copy(); ch_cs["timestamp"] = pd.to_datetime(ch_cs["timestamp"], utc=True); ch_cs = ch_cs.set_index("timestamp")
-                st.line_chart(ch_cs[["equity_eur"]])
-            except Exception:
-                pass
-
-        tr_cs = candle_trades(1000)
-        if not tr_cs.empty:
-            st.markdown("### Trades")
-            st.dataframe(tr_cs.sort_values("timestamp", ascending=False), use_container_width=True, hide_index=True)
-            st.download_button("⬇ Candlestick-Trades CSV", tr_cs.to_csv(index=False).encode("utf-8-sig"), "candlestick_trades.csv", "text/csv", key="cs_trade_download")
-
-        pst_cs = candle_pattern_stats()
-        st.markdown("### Welche Muster funktionieren wirklich?")
-        if pst_cs.empty:
-            st.caption("Noch nicht genug abgeschlossene Trades. Sobald Trades geschlossen wurden, wird hier Muster × Zeitraum × Richtung ausgewertet.")
-        else:
-            st.dataframe(pst_cs, use_container_width=True, hide_index=True)
-
-        with st.expander("Score- und Risiko-Regeln V7.2.1"):
-            st.write("• Muster bis 20 Punkte · Trend 20 · Support/Widerstand 20 · Volumen 15 · RSI/Momentum 10 · Bestätigung 10 · CRV 5")
-            st.write(f"• Einstieg erst ab {float(cfg_cs.get('min_score',75)):.0f}/100 und nur wenn die nächste abgeschlossene Kerze Signal-Hoch/-Tief bestätigt")
-            st.write(f"• Risiko je Trade {float(cfg_cs.get('risk_per_trade_pct',0.75)):.2f}% · max. {int(cfg_cs.get('max_positions',3))} Positionen · max. {float(cfg_cs.get('max_position_pct',30)):.0f}% je Position")
-            st.write(f"• Maximal 1 offene Position je Coin; stimmen 15m und 1h in derselben Richtung überein, bekommt das stärkste Setup +{int(cfg_cs.get('multi_tf_bonus',5))} Score-Punkte statt eines zweiten Trades")
-            st.write(f"• Stop hinter Signal-Kerze bzw. mindestens {float(cfg_cs.get('atr_stop_mult',1.5)):.1f}× ATR · Ziel {float(cfg_cs.get('reward_risk',2.0)):.1f}:1")
-            st.write(f"• Gebühren {float(cfg_cs.get('fee_pct',0.10)):.2f}% je Ausführung + {float(cfg_cs.get('slippage_pct',0.05)):.2f}% simulierte Slippage")
-        st.warning("Nur Paper-Trading. SHORT bedeutet eine 1x simulierte Short-Position; es werden keine Futures, Hebel, API-Keys oder echten Orders verwendet.")
+        pdf = candle_v2_positions()
+        if not pdf.empty:
+            st.markdown("### Offene Positionen")
+            st.dataframe(pdf, use_container_width=True, hide_index=True)
+        tdf = candle_v2_trades()
+        if not tdf.empty:
+            st.markdown("### Geschlossene Trades")
+            st.dataframe(tdf.sort_values("timestamp", ascending=False).head(300), use_container_width=True, hide_index=True)
+            st.download_button("⬇ Candlestick V2 Trades CSV", tdf.to_csv(index=False).encode("utf-8-sig"), "candlestick_v2_trades.csv", "text/csv", key="cv2_dl")
+        if latest_cv2:
+            st.caption(f"Letzter V2-Lauf: {latest_cv2.get('updated_at','–')} · Universum {latest_cv2.get('universe','–')} Coins · zuletzt {latest_cv2.get('signals_considered',0)} Quality-Signale.")
+        st.warning("Paper-Trading. Der Quality-Filter soll schlechte/mehrfache Signale reduzieren; er garantiert weder Gewinne noch verhindert er Verlustserien.")
 
 
 with tab2:
