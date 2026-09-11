@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -15,7 +16,15 @@ import pandas as pd
 
 from cloud_core import DATA_DIR, read_json, write_json
 
-API = "https://api.binance.com"
+BASE_ENDPOINTS = [
+    # Public market-data endpoint first: this avoids HTTP 451 on some cloud hosts
+    # where api.binance.com is geo-restricted even though no trading API is used.
+    "https://data-api.binance.vision",
+    "https://api1.binance.com",
+    "https://api2.binance.com",
+    "https://api3.binance.com",
+    "https://api.binance.com",
+]
 STATE_FILE = DATA_DIR / "candlestick_v2_state.json"
 TRADES_FILE = DATA_DIR / "candlestick_v2_trades.json"
 LATEST_FILE = DATA_DIR / "candlestick_v2_latest.json"
@@ -57,10 +66,33 @@ def _f(v: Any, default: float = 0.0) -> float:
 
 def _http_json(path: str, params: dict[str, Any] | None = None, timeout: int = 12) -> Any:
     qs = urllib.parse.urlencode(params or {})
-    url = API + path + (("?" + qs) if qs else "")
-    req = urllib.request.Request(url, headers={"User-Agent": "CryptoTradingZentrale-CandlestickV2/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    suffix = path + (("?" + qs) if qs else "")
+    last: Exception | None = None
+    errors: list[str] = []
+
+    for base in BASE_ENDPOINTS:
+        url = base.rstrip("/") + suffix
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "CryptoTradingZentrale-CandlestickV2/2.1"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            last = exc
+            errors.append(f"{base}: HTTP {exc.code}")
+            continue
+        except Exception as exc:
+            last = exc
+            errors.append(f"{base}: {type(exc).__name__}")
+            continue
+
+    detail = "; ".join(errors[-3:])
+    raise RuntimeError(
+        "Candlestick V2: Binance-Marktdaten nicht erreichbar. "
+        + (detail if detail else str(last))
+    )
 
 
 def _eligible_symbols() -> dict[str, str]:
