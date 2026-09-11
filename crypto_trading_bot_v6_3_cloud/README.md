@@ -1,13 +1,12 @@
-# V6.9 Long+Short Patch
+# Crypto Trading Zentrale V7.1 Cloud
 
-In GitHub im Hauptverzeichnis von `Crypto-Trading-Cloud` diese drei Python-Dateien hochladen bzw. ersetzen:
+V7.1 enthält weiterhin den V7.0 Crypto Opportunity Radar sowie alle bisherigen Forward-, Telegram-, Signal-Labor-, Strategy-Challenger-, Live-Paper- und Long/Short-Funktionen.
 
-- `live_paper_long_short.py` (neu)
-- `worker.py`
-- `cloud_app.py`
+Neu ist **Fee-Aware Grid 2.0** mit 3×-Gebührenhürde, dynamischem 0,8–1,5-%-Grid-Abstand, Bear-Market-Exposure-Bremse und transparenterem Verkaufs-P/L.
 
-Danach `Commit changes`. Railway deployt automatisch.
+Siehe `README_V71.md` für Details und Update-Anleitung.
 
-Keine neue Railway-Variable ist nötig. Das `/data`-Volume **nicht löschen**.
+Weiterhin ausschließlich Paper-/Shadow-Trading – keine echten Broker-Orders.
 
-Der bestehende V6.8 Long-only-Live-Paper-State bleibt getrennt erhalten. V6.9 legt für Long+Short eigene Dateien unter `/data/live_paper_long_short_*` an.
+## V7.2 Coin Candlestick Scanner
+Siehe `README_V72.md`. Die neue Strategie scannt dynamisch liquide USDT-Coins auf bestätigte Candlestick-Setups und handelt ausschließlich im Paper-Modus.

@@ -1,10 +1,10 @@
-CRYPTO TRADING ZENTRALE V6.4 CLOUD – KURZANLEITUNG
+CRYPTO TRADING ZENTRALE V6.5 CLOUD – KURZANLEITUNG
 ==================================================
 
-V6.4 erweitert V6.3 um Telegram-Benachrichtigungen. Die bestehende Railway-Volume /data
+V6.5 erweitert V6.3 um Telegram-Benachrichtigungen. Die bestehende Railway-Volume /data
 bleibt vollständig kompatibel. Beim Update werden die eingefrorenen V5.2-/V6-States nicht verändert.
 
-UPDATE VON V6.3 AUF V6.4
+UPDATE VON V6.3 AUF V6.5
 ------------------------
 1. ZIP entpacken.
 2. Den INHALT dieses Ordners in dasselbe GitHub-Repository-Hauptverzeichnis hochladen.

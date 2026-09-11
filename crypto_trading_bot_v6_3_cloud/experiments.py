@@ -17,6 +17,8 @@ class Trade:
     fee: float
     realized_pnl: float
     reason: str
+    basis_price: float = 0.0
+    gross_pnl: float = 0.0
 
 
 @dataclass
@@ -42,12 +44,14 @@ class Portfolio:
             return
         gross = qty_to_sell * price
         fee = gross * self.fee_rate
-        pnl = qty_to_sell * (price - self.avg_cost[asset]) - fee
+        basis_price = float(self.avg_cost[asset])
+        gross_pnl = qty_to_sell * (price - basis_price)
+        pnl = gross_pnl - fee
         self.cash += gross - fee
         self.qty[asset] -= qty_to_sell
         self.fees_paid += fee
         self.realized_pnl += pnl
-        self.trades.append(Trade(ts, asset, "SELL", price, qty_to_sell, fee, pnl, reason))
+        self.trades.append(Trade(ts, asset, "SELL", price, qty_to_sell, fee, pnl, reason, basis_price, gross_pnl))
         if self.qty[asset] <= 1e-10:
             self.qty[asset] = 0.0
             self.avg_cost[asset] = 0.0
@@ -69,7 +73,7 @@ class Portfolio:
         # Kaufgebühr ist Teil der Einstandskosten.
         self.avg_cost[asset] = (old_basis + value + fee) / self.qty[asset]
         self.fees_paid += fee
-        self.trades.append(Trade(ts, asset, "BUY", price, q, fee, 0.0, reason))
+        self.trades.append(Trade(ts, asset, "BUY", price, q, fee, 0.0, reason, self.avg_cost[asset], 0.0))
 
     def rebalance(self, targets: Dict[str, float], prices: Dict[str, float], ts: pd.Timestamp, reason: str) -> None:
         # Zielgewichte auf 0..1 begrenzen; Rest bleibt Cash.
@@ -272,7 +276,7 @@ def run_grid(asset: str, bundle: Dict[str, pd.DataFrame], start: pd.Timestamp, i
 
 def trades_to_frame(trades: List[Trade]) -> pd.DataFrame:
     if not trades:
-        return pd.DataFrame(columns=["Zeit", "Asset", "Aktion", "Preis", "Menge", "Gebühr", "Realisierter G/V", "Grund"])
+        return pd.DataFrame(columns=["Zeit", "Asset", "Aktion", "Preis", "Menge", "Gebühr", "Realisierter G/V", "Einstand", "Brutto G/V", "Grund"])
     rows = []
     for t in trades:
         rows.append({
@@ -283,6 +287,8 @@ def trades_to_frame(trades: List[Trade]) -> pd.DataFrame:
             "Menge": round(t.qty, 8),
             "Gebühr": round(t.fee, 4),
             "Realisierter G/V": round(t.realized_pnl, 4),
+            "Einstand": round(t.basis_price, 6) if t.basis_price else None,
+            "Brutto G/V": round(t.gross_pnl, 4),
             "Grund": t.reason,
         })
     return pd.DataFrame(rows)

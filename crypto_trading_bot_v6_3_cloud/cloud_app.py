@@ -39,8 +39,19 @@ from fee_aware_grid import (
     process_fee_grid, result_dataframe as fee_grid_results, resume_fee_grid,
     start_fee_grid, state as fee_grid_state, stop_fee_grid,
 )
+from crypto_radar import (
+    build_new_alerts as radar_build_alerts, history_dataframe as radar_history,
+    latest as radar_latest, rows_dataframe as radar_rows, scan_crypto_radar, status as radar_status,
+)
+from candlestick_scanner import (
+    DEFAULTS as CANDLE_DEFAULTS, history_dataframe as candle_history, latest as candle_latest,
+    pattern_stats as candle_pattern_stats, positions_dataframe as candle_positions,
+    process_candlestick_paper, resume_candlestick_paper, set_entry_paused as set_candle_entry_paused,
+    signals_dataframe as candle_signals, start_candlestick_paper, state as candlestick_state,
+    stop_candlestick_paper, trades_dataframe as candle_trades,
+)
 
-TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V6.10 Cloud")
+TITLE = os.environ.get("TRADING_DASHBOARD_TITLE", "Crypto Trading Zentrale – V7.2 Candlestick")
 PASSWORD = os.environ.get("TRADING_DASHBOARD_PASSWORD", "")
 
 st.set_page_config(page_title=TITLE, page_icon="☁️", layout="wide")
@@ -82,7 +93,7 @@ def auth_gate() -> None:
 auth_gate()
 
 st.title("☁️ " + TITLE)
-st.caption("Cloud-/Handy-Zentrale für die eingefrorenen Paper-Tests. Keine echten Broker-Orders und keine Live-Trading-Berechtigung.")
+st.caption("Cloud-/Handy-Zentrale mit Paper-Tests, Live-Paper, Crypto-Radar und Coin-Candlestick-Scanner. Keine echten Broker-Orders und keine Live-Trading-Berechtigung.")
 
 status = state_status()
 with st.sidebar:
@@ -97,6 +108,10 @@ with st.sidebar:
     st.write(("✅" if ls_side and ls_side.get("active") else "⚪") + " Live-Paper Long+Short")
     fg_side = fee_grid_state()
     st.write(("✅" if fg_side and fg_side.get("active") else "⚪") + " Fee-Aware Grid Vergleich")
+    cs_side = candlestick_state()
+    st.write(("✅" if cs_side and cs_side.get("active") else "⚪") + " Coin Candlestick Scanner")
+    radar_side = radar_status()
+    st.write(("✅" if radar_side.get("available") else "⚪") + " Crypto Opportunity Radar")
     worker = status.get("worker") or {}
     if worker:
         st.caption("Worker: " + ("✅ " if worker.get("ok") else "⚠️ ") + str(worker.get("message", "")))
@@ -128,7 +143,7 @@ def show_table(table: pd.DataFrame) -> None:
         d.metric("Tests mit Wert", str(len(avail)))
 
 
-tab0, tab1, tab_lab, tab_challenge, tab_live, tab_ls, tab_feegrid, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🧪 Signal-Labor", "🏆 Strategy Challenger", "🎮 Live-Paper", "↕️ Long+Short", "💸 Fee-Grid", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
+tab0, tab1, tab_radar, tab_lab, tab_challenge, tab_live, tab_ls, tab_feegrid, tab_candle, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Zentrale", "📡 Markt-Monitor", "🌐 Crypto-Radar", "🧪 Signal-Labor", "🏆 Strategy Challenger", "🎮 Live-Paper", "↕️ Long+Short", "💸 Fee-Grid", "🕯️ Candlestick", "📱 Handy", "🔔 Benachrichtigungen", "⚙️ Cloud-Setup", "📁 Verlauf"])
 
 with tab0:
     st.subheader("Forward-Tests in der Cloud")
@@ -215,6 +230,84 @@ with tab1:
                 st.json(FROZEN_QUALITY)
     else:
         st.info("Noch kein Markt-Scan gespeichert.")
+
+with tab_radar:
+    st.subheader("🌐 Crypto Opportunity Radar")
+    st.caption("Breiter Discovery-Scanner über handelbare Binance-USDT-Spotmärkte. Erst grober Marktfilter, dann tiefe 1h-Analyse der auffälligsten liquiden Coins. Radar-Scores sind Beobachtungswerte – keine Gewinnprognose oder Kaufempfehlung.")
+
+    r1, r2 = st.columns(2)
+    deep_n = r1.slider("Detailanalyse pro Scan", min_value=20, max_value=80, value=40, step=10, help="Mehr Coins = breitere Suche, aber mehr öffentliche API-Abfragen.")
+    min_vol_m = r2.select_slider("Mindest-24h-Volumen", options=[1, 2, 5, 10, 25, 50], value=2, format_func=lambda x: f"{x} Mio. $")
+    if st.button("🌐 Gesamten Kryptomarkt jetzt scannen", type="primary", use_container_width=True, key="radar_scan_now"):
+        try:
+            with st.spinner("USDT-Spotmärkte werden gefiltert und die auffälligsten Coins tief analysiert …"):
+                rp = scan_crypto_radar(deep_scan_n=int(deep_n), min_quote_volume_usd=float(min_vol_m) * 1_000_000)
+            st.session_state["crypto_radar_payload"] = rp
+            alerts = radar_build_alerts(rp)
+            sent = 0
+            for msg in alerts:
+                ok, _ = send_telegram(msg)
+                sent += 1 if ok else 0
+            if alerts:
+                st.toast(f"Radar: {sent}/{len(alerts)} neue Telegram-Alarme gesendet")
+            st.success(f"Radar aktualisiert: {rp.get('liquid_universe',0)} liquide Märkte gefunden, {rp.get('deep_scanned',0)} detailliert analysiert.")
+        except Exception as exc:
+            st.error(f"Crypto-Radar fehlgeschlagen: {exc}")
+
+    rp = st.session_state.get("crypto_radar_payload") or radar_latest()
+    if not rp:
+        st.info("Noch kein Crypto-Radar-Scan gespeichert. Der Cloud-Worker scannt standardmäßig stündlich; du kannst oben auch manuell starten.")
+    else:
+        rdf = radar_rows(rp)
+        if not rdf.empty:
+            a,b,c,d = st.columns(4)
+            a.metric("Liquides Universum", str(rp.get("liquid_universe", 0)))
+            b.metric("Tief analysiert", str(rp.get("deep_scanned", 0)))
+            c.metric("🔥 Score ≥80", str(rp.get("hot_count", 0)))
+            d.metric("🚨 Anomalien ≥75", str(rp.get("anomaly_count", 0)))
+            ts = rp.get("generated_at")
+            if ts:
+                try:
+                    t = pd.Timestamp(ts).tz_convert("Europe/Berlin")
+                    st.caption("Letzter Radar-Scan: " + t.strftime("%d.%m.%Y %H:%M") + " · Quelle: " + str(rp.get("source","")))
+                except Exception:
+                    st.caption("Letzter Radar-Scan: " + str(ts))
+
+            top = rdf.iloc[0]
+            risk = str(top.get("Risiko", "–"))
+            st.markdown(f"### Aktuell vorne: **{top.get('Coin','–')}** · Radar {float(top.get('Radar-Score',0)):.1f}/100 · {top.get('Richtung','')}")
+            st.caption(f"1h {float(top.get('1h %',0)):+.2f}% · 6h {float(top.get('6h %',0)):+.2f}% · 24h {float(top.get('24h %',0)):+.2f}% · Volumen {float(top.get('Volumen-Spike',0)):.1f}× · RSI {float(top.get('RSI',0)):.1f} · Risiko: {risk}")
+
+            st.markdown("### 🔥 Opportunity-Ranking")
+            cols = [c for c in ["Coin","Radar-Score","Richtung","1h %","6h %","24h %","7T %","Volumen-Spike","24h Volumen $","RSI","Abstand 7T-Hoch %","Gründe","Risiko"] if c in rdf.columns]
+            st.dataframe(rdf[cols].head(50), use_container_width=True, hide_index=True)
+
+            c1,c2 = st.columns(2)
+            with c1:
+                st.markdown("### 🚨 Auffällige Bewegungen")
+                an = rdf.sort_values("Anomalie", ascending=False).head(12)
+                st.dataframe(an[[c for c in ["Coin","Anomalie","Radar-Score","1h %","6h %","Volumen-Spike","Gründe","Risiko"] if c in an.columns]], use_container_width=True, hide_index=True)
+            with c2:
+                st.markdown("### 💧 Höchste Liquidität im Deep-Scan")
+                liq = rdf.sort_values("24h Volumen $", ascending=False).head(12)
+                st.dataframe(liq[[c for c in ["Coin","Radar-Score","24h Volumen $","24h %","Richtung","Risiko"] if c in liq.columns]], use_container_width=True, hide_index=True)
+
+            st.download_button("⬇ Crypto-Radar CSV", rdf.to_csv(index=False).encode("utf-8-sig"), "crypto_radar_latest.csv", "text/csv", key="radar_download")
+            with st.expander("Was der Radar bewusst NICHT macht"):
+                st.write("• Er kauft keinen Coin automatisch.")
+                st.write("• Ein hoher Radar-Score bedeutet nicht, dass der Kurs weiter steigen muss.")
+                st.write("• Sehr kleine/illiquide Märkte werden standardmäßig ausgesiebt.")
+                st.write("• Der Radar deckt die handelbaren Binance-USDT-Spotmärkte der Datenquelle ab – nicht buchstäblich jeden Token auf jeder Blockchain.")
+                st.write("• Auffällige Pump-/Dump-Bewegungen werden als Anomalie/Risiko gezeigt, nicht als sichere Chance.")
+
+            hist_r = radar_history(1500)
+            if not hist_r.empty:
+                st.markdown("### Radar-Verlauf")
+                st.caption("Gespeichert werden die Top-20 jedes Scans. Damit können wir später prüfen, ob hohe Radar-Scores tatsächlich häufiger zu guten Folgebewegungen geführt haben.")
+                st.download_button("⬇ Radar-Verlauf CSV", hist_r.to_csv(index=False).encode("utf-8-sig"), "crypto_radar_history.csv", "text/csv", key="radar_hist_download")
+        else:
+            st.info("Der letzte Radar-Scan enthält noch keine Detailwerte.")
+
 
 with tab_lab:
     st.subheader("🧪 Quality-Signal-Labor")
@@ -621,29 +714,44 @@ with tab_ls:
             st.dataframe(trades_ls.sort_values("timestamp", ascending=False), use_container_width=True, hide_index=True)
             st.download_button("⬇ Long+Short Trades CSV", trades_ls.to_csv(index=False).encode("utf-8-sig"), "live_paper_long_short_trades.csv", "text/csv")
 
-        st.warning("↕️ **Nur Simulation:** SHORTs sind 1x-paper-simulierte Positionen. V6.10 enthält weiterhin keinen Broker-Login, keinen API-Key und keine Funktion für echte Orders.")
+        st.warning("↕️ **Nur Simulation:** SHORTs sind 1x-paper-simulierte Positionen. V7.1 enthält weiterhin keinen Broker-Login, keinen API-Key und keine Funktion für echte Orders.")
 
 
 with tab_feegrid:
-    st.subheader("💸 Fee-Aware Grid Challenger")
-    st.caption("Separater Shadow-Vergleich: Das normale BTC-/ETH-Adaptive-Grid läuft ab demselben Startpunkt gegen eine gebührenbewusstere Variante. Die laufenden V6-Grids werden nicht verändert.")
+    st.subheader("💸 Fee-Aware Grid V7.1")
+    st.caption("Separater Shadow-Vergleich: Standard BTC-/ETH-Adaptive-Grid gegen V7.1 mit Gebührenhürde, dynamischem Abstand und Bear-Market-Exposure-Bremse. Die laufenden V6-Grids werden nicht verändert.")
     fg = fee_grid_state()
     if not fg:
         v6s = state_status().get("v6") or {}
         fee_default = float(v6s.get("fee_pct", FEE_GRID_DEFAULTS["fee_pct"]) or FEE_GRID_DEFAULTS["fee_pct"])
-        st.info("Noch keine Fee-Grid-Saison gestartet. Beide Varianten beginnen beim Start gleichzeitig mit je 1.000 € Spielgeld pro Coin.")
+        st.info("Noch keine V7.1 Fee-Grid-Saison gestartet. Beide Varianten beginnen gleichzeitig mit demselben Spielgeld.")
         a,b,c = st.columns(3)
         capital_fg = a.number_input("Startkapital je Variante (€)", min_value=100.0, value=1000.0, step=100.0, key="fg_capital")
-        slip_fg = b.number_input("angenommene Slippage je Order (%)", min_value=0.0, max_value=2.0, value=float(FEE_GRID_DEFAULTS["slippage_pct"]), step=0.05, key="fg_slip")
+        slip_fg = b.number_input("Slippage je Order (%)", min_value=0.0, max_value=2.0, value=float(FEE_GRID_DEFAULTS["slippage_pct"]), step=0.05, key="fg_slip")
         buffer_fg = c.number_input("Sicherheitspuffer (%)", min_value=0.0, max_value=3.0, value=float(FEE_GRID_DEFAULTS["safety_buffer_pct"]), step=0.05, key="fg_buffer")
-        hurdle = 2*fee_default + 2*slip_fg + buffer_fg
-        st.write(f"**Gebühr:** {fee_default:.2f}% je Order · **Kostenhürde für neue Exposition:** ca. {hurdle:.2f}% erwartete Rücklauf-Strecke")
-        st.caption("Zusätzlich: 2 abgeschlossene Stunden Bestätigung, mindestens 3 Stunden zwischen Rebalances und mindestens 0,70% Kursweg seit dem letzten Rebalance. Risk-off-Ausstiege werden nie verzögert.")
-        if st.button("🏁 Fee-Aware-vs-Standard ab jetzt starten", type="primary", use_container_width=True, key="fg_start"):
+
+        d,e,f = st.columns(3)
+        fee_mult_fg = d.number_input("Fee-Multiplikator", min_value=1.0, max_value=6.0, value=float(FEE_GRID_DEFAULTS["fee_multiple"]), step=0.5, key="fg_fee_mult")
+        min_move_fg = e.number_input("Min. Grid-Abstand (%)", min_value=0.2, max_value=3.0, value=float(FEE_GRID_DEFAULTS["min_price_move_pct"]), step=0.1, key="fg_min_move")
+        max_move_fg = f.number_input("Max. Grid-Abstand (%)", min_value=float(min_move_fg), max_value=5.0, value=max(float(min_move_fg), float(FEE_GRID_DEFAULTS["max_price_move_pct"])), step=0.1, key="fg_max_move")
+
+        pure_fee_hurdle = 2 * fee_default * fee_mult_fg
+        all_in_hurdle = 2 * fee_default + 2 * slip_fg + buffer_fg
+        hurdle = max(pure_fee_hurdle, all_in_hurdle)
+        st.write(f"**Gebühr:** {fee_default:.2f}% je Order · **V7.1 Kostenhürde:** {hurdle:.2f}% erwartete Rücklauf-Strecke")
+        st.caption("Standard: 2h Signalbestätigung · 4h Cooldown · dynamischer Kursabstand 0,8–1,5% · max. 60% Exposure, im Bear-Regime max. 40%. Risk-off-Ausstiege bleiben sofort möglich.")
+        if st.button("🏁 V7.1 Fee-Aware-vs-Standard ab jetzt starten", type="primary", use_container_width=True, key="fg_start"):
             try:
-                start_fee_grid(float(capital_fg), fee_default, slippage_pct=float(slip_fg), safety_buffer_pct=float(buffer_fg))
-                res = process_fee_grid()
-                st.success("Fee-Grid-Vergleich eingefroren. Es zählen nur abgeschlossene 1h-Kerzen ab jetzt.")
+                start_fee_grid(
+                    float(capital_fg), fee_default,
+                    slippage_pct=float(slip_fg),
+                    safety_buffer_pct=float(buffer_fg),
+                    fee_multiple=float(fee_mult_fg),
+                    min_price_move_pct=float(min_move_fg),
+                    max_price_move_pct=float(max_move_fg),
+                )
+                process_fee_grid()
+                st.success("V7.1 Fee-Grid-Vergleich gestartet. Es zählen nur abgeschlossene 1h-Kerzen ab jetzt.")
                 st.rerun()
             except Exception as exc:
                 st.error(str(exc))
@@ -653,17 +761,24 @@ with tab_feegrid:
             local_fg = started_fg.tz_convert("Europe/Berlin") if started_fg.tzinfo else started_fg
         except Exception:
             local_fg = started_fg
-        cfg_fg = fg.get("params") or {}
+        cfg_fg = {**FEE_GRID_DEFAULTS, **(fg.get("params") or {})}
         latest_fg = fee_grid_latest()
         summary_fg = latest_fg.get("summary", {}) if latest_fg else {}
-        a,b,c,d = st.columns(4)
-        a.metric("Start", local_fg.strftime("%d.%m. %H:%M"))
-        b.metric("Gebühr", f"{float(cfg_fg.get('fee_pct',0.25)):.2f}%")
-        hurdle_fg = 2*float(cfg_fg.get('fee_pct',0.25)) + 2*float(cfg_fg.get('slippage_pct',0.10)) + float(cfg_fg.get('safety_buffer_pct',0.35))
-        c.metric("Kostenhürde", f"{hurdle_fg:.2f}%")
-        d.metric("Status", "läuft" if fg.get("active", True) else "gestoppt")
+        algorithm_version = str(latest_fg.get("algorithm_version") or fg.get("algorithm_version") or fg.get("version") or "älter")
 
-        cc1,cc2 = st.columns(2)
+        fee_fg = float(cfg_fg.get("fee_pct", 0.25))
+        fee_mult_fg = float(cfg_fg.get("fee_multiple", 3.0))
+        slip_fg = float(cfg_fg.get("slippage_pct", 0.10))
+        buffer_fg = float(cfg_fg.get("safety_buffer_pct", 0.35))
+        hurdle_fg = max(2*fee_fg*fee_mult_fg, 2*fee_fg + 2*slip_fg + buffer_fg)
+        a,b,c,d,e = st.columns(5)
+        a.metric("Start", local_fg.strftime("%d.%m. %H:%M"))
+        b.metric("Algorithmus", f"V{algorithm_version}")
+        c.metric("Gebühr", f"{fee_fg:.2f}%")
+        d.metric("Kostenhürde", f"{hurdle_fg:.2f}%")
+        e.metric("Status", "läuft" if fg.get("active", True) else "gestoppt")
+
+        cc1,cc2,cc3 = st.columns(3)
         if cc1.button("🔄 Fee-Grid jetzt auswerten", type="primary", use_container_width=True, key="fg_update"):
             try:
                 res = process_fee_grid()
@@ -672,26 +787,49 @@ with tab_feegrid:
             except Exception as exc:
                 st.error(str(exc))
         if fg.get("active", True):
-            if cc2.button("⏹ Fee-Grid-Vergleich stoppen", use_container_width=True, key="fg_stop"):
+            if cc2.button("⏹ Vergleich stoppen", use_container_width=True, key="fg_stop"):
                 stop_fee_grid(); st.rerun()
         else:
-            if cc2.button("▶ Fee-Grid-Vergleich fortsetzen", use_container_width=True, key="fg_resume"):
+            if cc2.button("▶ Vergleich fortsetzen", use_container_width=True, key="fg_resume"):
                 resume_fee_grid(); st.rerun()
+        if cc3.button("🆕 Saubere V7.1-Saison neu starten", use_container_width=True, key="fg_restart_v71"):
+            try:
+                start_fee_grid(
+                    float(cfg_fg.get("start_capital", 1000.0)), fee_fg,
+                    slippage_pct=slip_fg,
+                    safety_buffer_pct=buffer_fg,
+                    fee_multiple=float(cfg_fg.get("fee_multiple", 3.0)),
+                    min_price_move_pct=float(cfg_fg.get("min_price_move_pct", 0.80)),
+                    max_price_move_pct=float(cfg_fg.get("max_price_move_pct", 1.50)),
+                    volatility_multiplier=float(cfg_fg.get("volatility_multiplier", 1.80)),
+                    max_exposure_pct=float(cfg_fg.get("max_exposure_pct", 60.0)),
+                    bear_max_exposure_pct=float(cfg_fg.get("bear_max_exposure_pct", 40.0)),
+                )
+                process_fee_grid()
+                st.success("Neue V7.1-Saison gestartet. Der vorherige Fee-Grid-Stand wurde im /data-Archiv gesichert.")
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+
+        if algorithm_version not in {"7.1", "V7.1"}:
+            st.warning("Dieser Vergleich wurde mit einer älteren Fee-Grid-Version gestartet. Für einen sauberen Vorher/Nachher-Test die neue V7.1-Saison starten.")
 
         rdf = fee_grid_results()
         if rdf.empty:
             st.info("Noch keine abgeschlossene 1h-Kerze seit dem Start auswertbar.")
         else:
-            st.markdown("### Standard gegen Fee-Aware")
+            st.markdown("### Standard gegen Fee-Aware V7.1")
             st.dataframe(rdf, use_container_width=True, hide_index=True)
             for asset in ["BTC", "ETH"]:
                 x = summary_fg.get(asset, {}) or {}
                 advantage = float(x.get("net_advantage_eur", 0) or 0)
                 saved = float(x.get("fees_saved_eur", 0) or 0)
+                step = float(x.get("dynamic_step_pct", 0) or 0)
+                regime = str(x.get("regime", "–") or "–")
                 if advantage > 0:
-                    st.success(f"{asset}: Fee-Aware liegt aktuell {advantage:+.2f} € vor Standard und hat {saved:+.2f} € Gebühren eingespart.")
+                    st.success(f"{asset}: V7.1 liegt {advantage:+.2f} € vor Standard · Gebührenersparnis {saved:+.2f} € · Abstand {step:.2f}% · Regime {regime}.")
                 else:
-                    st.info(f"{asset}: Fee-Aware liegt aktuell {advantage:+.2f} € gegen Standard; Gebührenersparnis {saved:+.2f} €.")
+                    st.info(f"{asset}: V7.1 liegt {advantage:+.2f} € gegen Standard · Gebührenersparnis {saved:+.2f} € · Abstand {step:.2f}% · Regime {regime}.")
 
         hfg = fee_grid_history(3000)
         if not hfg.empty:
@@ -705,15 +843,126 @@ with tab_feegrid:
                     st.line_chart(piv)
             except Exception:
                 pass
-            st.download_button("⬇ Fee-Grid Verlauf CSV", hfg.to_csv(index=False).encode("utf-8-sig"), "fee_aware_grid_verlauf.csv", "text/csv", key="fg_download")
+            st.download_button("⬇ Fee-Grid Verlauf CSV", hfg.to_csv(index=False).encode("utf-8-sig"), "fee_aware_grid_v71_verlauf.csv", "text/csv", key="fg_download")
 
-        st.markdown("### Was Fee-Aware anders macht")
-        st.write("• gleiche z-Score-Grid-Zielstufen wie das normale V6-Grid")
-        st.write("• neue Exposition nur, wenn der Abstand zur 72h-EMA die geschätzten Hin-/Rückkosten plus Puffer übersteigt")
-        st.write("• Zieländerung muss zwei abgeschlossene Stunden bestehen")
-        st.write("• mindestens 3 Stunden und 0,70% Kursweg zwischen normalen Rebalances")
-        st.write("• Risk-off-Ausstiege bleiben sofort möglich")
-        st.warning("Shadow-/Paper-Test: Dieser Vergleich verändert weder BTC Grid noch ETH Grid und sendet keine echten Orders.")
+        st.markdown("### Was V7.1 anders macht")
+        st.write("• neue Exposition erst ab mindestens 3× Roundtrip-Gebühr bzw. höherer All-in-Kostenhürde")
+        st.write("• dynamischer Mindest-Kursweg zwischen 0,8% und 1,5%, abhängig von der 24h-Stundenvolatilität")
+        st.write("• 2 abgeschlossene Stunden Bestätigung und 4 Stunden Cooldown gegen Hin-und-her-Trading")
+        st.write("• maximal 60% Exposure; im Bear-Regime maximal 40%")
+        st.write("• starker Risk-off-Ausstieg bleibt sofort möglich")
+        st.write("• V6-Verkäufe zeigen zusätzlich den gewichteten Einstand, damit negative G/V trotz höherem letzten Kaufkurs nachvollziehbar sind")
+        st.warning("Shadow-/Paper-Test: V7.1 verändert weder die eingefrorenen BTC-/ETH-Grid-Vergleiche noch sendet es echte Orders.")
+
+
+with tab_candle:
+    st.subheader("🕯️ Coin Candlestick Scanner V7.2")
+    st.caption("Dynamischer Paper-Scanner für die liquidesten USDT-Coins. 15m + 1h · bestätigte Kerzensignale · Score 0–100 · ATR-Stop · 2R-Ziel. Keine echten Orders.")
+    cs = candlestick_state()
+    if not cs:
+        c1, c2, c3 = st.columns(3)
+        start_cap_cs = c1.number_input("Virtuelles Startkapital €", min_value=100.0, value=float(CANDLE_DEFAULTS["start_capital"]), step=100.0, key="cs_startcap")
+        min_score_cs = c2.slider("Mindest-Score", 60, 95, int(CANDLE_DEFAULTS["min_score"]), 1, key="cs_score")
+        risk_cs = c3.number_input("Risiko je Trade %", min_value=0.10, max_value=2.00, value=float(CANDLE_DEFAULTS["risk_per_trade_pct"]), step=0.05, key="cs_risk")
+        st.info("Start-Setup: Top 50 liquide USDT-Märkte · Spread ≤ 25 bps · mindestens 5 Mio. $ 24h-Volumen · max. 3 Positionen · 1x Paper Long/Short.")
+        if st.button("▶ Candlestick-Paper mit 1.000-€-Logik starten", type="primary", key="cs_start"):
+            try:
+                start_candlestick_paper(start_capital=float(start_cap_cs), min_score=float(min_score_cs), risk_per_trade_pct=float(risk_cs))
+                with st.spinner("Erster Coin-Scan läuft …"):
+                    process_candlestick_paper(force_scan=True)
+                st.success("Candlestick-Scanner gestartet.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Start fehlgeschlagen: {exc}")
+    else:
+        cfg_cs = cs.get("params") or CANDLE_DEFAULTS
+        start_cs = float(cfg_cs.get("start_capital", 1000.0))
+        equity_cs = float(cs.get("equity", start_cs))
+        ret_cs = (equity_cs / start_cs - 1.0) * 100.0 if start_cs > 0 else 0.0
+        closed_cs = int(cs.get("closed_trades", 0))
+        wins_cs = int(cs.get("wins", 0))
+        winrate_cs = wins_cs / closed_cs * 100.0 if closed_cs else 0.0
+        a, b, c, d, e = st.columns(5)
+        a.metric("Kontowert", f"{equity_cs:,.2f} €", f"{ret_cs:+.2f} %")
+        b.metric("Offene Positionen", str(len(cs.get("positions", {}))))
+        c.metric("Abgeschl. Trades", str(closed_cs))
+        d.metric("Trefferquote", f"{winrate_cs:.1f} %" if closed_cs else "–")
+        e.metric("Gebühren", f"{float(cs.get('fees_total',0)):.2f} €")
+
+        x1, x2, x3 = st.columns(3)
+        if cs.get("active", True):
+            if x1.button("⏹ Scanner stoppen", use_container_width=True, key="cs_stop"):
+                stop_candlestick_paper(); st.rerun()
+        else:
+            if x1.button("▶ Scanner fortsetzen", use_container_width=True, key="cs_resume"):
+                resume_candlestick_paper(); st.rerun()
+        if cs.get("entry_paused", False):
+            if x2.button("▶ Neue Einstiege erlauben", use_container_width=True, key="cs_unpause"):
+                set_candle_entry_paused(False); st.rerun()
+        else:
+            if x2.button("⏸ Neue Einstiege pausieren", use_container_width=True, key="cs_pause"):
+                set_candle_entry_paused(True); st.rerun()
+        if x3.button("🔎 Jetzt 50 Coins scannen", use_container_width=True, key="cs_scan"):
+            try:
+                with st.spinner("Liquideste USDT-Coins werden auf 15m und 1h geprüft …"):
+                    res_cs = process_candlestick_paper(force_scan=True)
+                for ev in res_cs.get("events", []) or []:
+                    txt = str(ev.get("telegram", "")).strip()
+                    if txt:
+                        send_telegram(txt)
+                st.success(str(res_cs.get("message", "Scan abgeschlossen")))
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Scan fehlgeschlagen: {exc}")
+
+        st.markdown("### Offene Candlestick-Positionen")
+        pos_cs = candle_positions(cs)
+        if pos_cs.empty:
+            st.info("Aktuell keine Position. Der Scanner wartet auf ein bestätigtes Setup ab dem Mindest-Score.")
+        else:
+            st.dataframe(pos_cs, use_container_width=True, hide_index=True)
+
+        latest_cs = candle_latest()
+        st.markdown("### Aktuelle Signale")
+        if latest_cs:
+            q_cs = int(latest_cs.get("qualified", 0) or 0)
+            st.caption(f"Letzter Scan: {latest_cs.get('evaluated_at','–')} · {latest_cs.get('universe_size',0)} Coins tief geprüft · {q_cs} bestätigte Setups ab Score {float(cfg_cs.get('min_score',75)):.0f}.")
+        sig_cs = candle_signals(100)
+        if sig_cs.empty:
+            st.info("Im letzten Scan wurde keine der überwachten Kerzenformationen erkannt.")
+        else:
+            st.dataframe(sig_cs, use_container_width=True, hide_index=True)
+            st.download_button("⬇ Candlestick-Signale CSV", sig_cs.to_csv(index=False).encode("utf-8-sig"), "candlestick_signale.csv", "text/csv", key="cs_signal_download")
+
+        hist_cs = candle_history(3000)
+        if not hist_cs.empty:
+            st.markdown("### Kontoverlauf")
+            try:
+                ch_cs = hist_cs.copy(); ch_cs["timestamp"] = pd.to_datetime(ch_cs["timestamp"], utc=True); ch_cs = ch_cs.set_index("timestamp")
+                st.line_chart(ch_cs[["equity_eur"]])
+            except Exception:
+                pass
+
+        tr_cs = candle_trades(1000)
+        if not tr_cs.empty:
+            st.markdown("### Trades")
+            st.dataframe(tr_cs.sort_values("timestamp", ascending=False), use_container_width=True, hide_index=True)
+            st.download_button("⬇ Candlestick-Trades CSV", tr_cs.to_csv(index=False).encode("utf-8-sig"), "candlestick_trades.csv", "text/csv", key="cs_trade_download")
+
+        pst_cs = candle_pattern_stats()
+        st.markdown("### Welche Muster funktionieren wirklich?")
+        if pst_cs.empty:
+            st.caption("Noch nicht genug abgeschlossene Trades. Sobald Trades geschlossen wurden, wird hier Muster × Zeitraum × Richtung ausgewertet.")
+        else:
+            st.dataframe(pst_cs, use_container_width=True, hide_index=True)
+
+        with st.expander("Score- und Risiko-Regeln V7.2"):
+            st.write("• Muster bis 20 Punkte · Trend 20 · Support/Widerstand 20 · Volumen 15 · RSI/Momentum 10 · Bestätigung 10 · CRV 5")
+            st.write(f"• Einstieg erst ab {float(cfg_cs.get('min_score',75)):.0f}/100 und nur wenn die nächste abgeschlossene Kerze Signal-Hoch/-Tief bestätigt")
+            st.write(f"• Risiko je Trade {float(cfg_cs.get('risk_per_trade_pct',0.75)):.2f}% · max. {int(cfg_cs.get('max_positions',3))} Positionen · max. {float(cfg_cs.get('max_position_pct',30)):.0f}% je Position")
+            st.write(f"• Stop hinter Signal-Kerze bzw. mindestens {float(cfg_cs.get('atr_stop_mult',1.5)):.1f}× ATR · Ziel {float(cfg_cs.get('reward_risk',2.0)):.1f}:1")
+            st.write(f"• Gebühren {float(cfg_cs.get('fee_pct',0.10)):.2f}% je Ausführung + {float(cfg_cs.get('slippage_pct',0.05)):.2f}% simulierte Slippage")
+        st.warning("Nur Paper-Trading. SHORT bedeutet eine 1x simulierte Short-Position; es werden keine Futures, Hebel, API-Keys oder echten Orders verwendet.")
 
 
 with tab2:
@@ -873,7 +1122,7 @@ with tab4:
         st.success("Dashboard-Passwort ist als Umgebungsvariable gesetzt.")
     else:
         st.error("Noch kein `TRADING_DASHBOARD_PASSWORD` gesetzt. So nicht öffentlich ins Internet stellen.")
-    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V6.10 enthält weiterhin keinerlei echte Broker-Orderfunktion; der neue Live-Paper-Modus simuliert Orders ausschließlich mit Spielgeld.")
+    st.write("Broker-API-Schlüssel gehören später ausschließlich in Server-Secrets/Umgebungsvariablen, niemals in ZIP-Dateien oder Quellcode. V7.1 enthält weiterhin keinerlei echte Broker-Orderfunktion; der neue Live-Paper-Modus simuliert Orders ausschließlich mit Spielgeld.")
     st.markdown("### 24/7-Aktualisierung")
     worker = state_status().get("worker") or {}
     if worker:
@@ -900,4 +1149,4 @@ with tab5:
         st.info("Noch kein Verlauf vorhanden. Der Cloud-Worker oder eine manuelle Auswertung legt ihn automatisch an.")
 
 st.markdown("---")
-st.caption("V6.10 Cloud bleibt reines Paper-Trading/Monitoring. Multi-Coin Live-Paper nutzt aktuelle Kurse, sendet aber keinerlei echte Orders.")
+st.caption("V7.1 Cloud bleibt reines Paper-Trading/Monitoring. Multi-Coin Live-Paper nutzt aktuelle Kurse, sendet aber keinerlei echte Orders.")

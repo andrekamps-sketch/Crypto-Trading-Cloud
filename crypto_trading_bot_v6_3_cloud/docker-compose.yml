@@ -7,6 +7,8 @@ services:
       TRADING_DASHBOARD_PASSWORD: "CHANGE_ME"
       AUTO_UPDATE_MINUTES: "60"
       AUTO_MARKET_SCAN: "1"
+      CANDLESTICK_AUTO_START: "1"
+      LIVE_PAPER_UPDATE_MINUTES: "5"
       DATA_DIR: "/data"
     volumes:
       - trading_data:/data

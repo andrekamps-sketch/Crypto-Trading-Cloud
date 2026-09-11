@@ -285,6 +285,8 @@ def _trade_line(e: dict[str, Any], table: pd.DataFrame | None = None, timezone: 
     price = _as_float(e.get("price"))
     fee = _as_float(e.get("fee"))
     pnl = _as_float(e.get("pnl_eur", e.get("realized_pnl")))
+    gross_pnl = _as_float(e.get("gross_pnl_eur"))
+    basis_price = _as_float(e.get("basis_price"))
     reason = str(e.get("reason", "")).strip()
     when = _event_time_local(e.get("timestamp"), timezone)
 
@@ -302,7 +304,12 @@ def _trade_line(e: dict[str, Any], table: pd.DataFrame | None = None, timezone: 
         else:
             icon = "✅" if pnl > 0 else "❌" if pnl < 0 else "➖"
             result_s = f"G/V {pnl:+.2f} €"
-        return f"{icon} VERKAUF · {asset} @ {price_s} · {result_s}\n{system} · {strategy} · {when}{fee_s}{reason_s}{account_s}"
+        basis_s = ""
+        if basis_price is not None and basis_price > 0:
+            basis_fmt = f"{basis_price:,.4f} €" if basis_price < 1000 else f"{basis_price:,.2f} €"
+            basis_s = f" · Einstand {basis_fmt}"
+        gross_s = f" · brutto {gross_pnl:+.2f} €" if gross_pnl is not None and abs(gross_pnl) > 0.004 else ""
+        return f"{icon} VERKAUF · {asset} @ {price_s} · {result_s}{basis_s}\n{system} · {strategy} · {when}{gross_s}{fee_s}{reason_s}{account_s}"
     return f"🔔 {system} · {strategy}: {action} {asset} @ {price_s} · {when}{fee_s}{reason_s}{account_s}"
 
 

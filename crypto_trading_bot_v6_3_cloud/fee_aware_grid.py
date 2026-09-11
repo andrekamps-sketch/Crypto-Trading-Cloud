@@ -19,16 +19,22 @@ STATE_FILE = DATA_DIR / "fee_aware_grid_state.json"
 HISTORY_FILE = DATA_DIR / "fee_aware_grid_history.csv"
 LATEST_FILE = DATA_DIR / "fee_aware_grid_latest.json"
 
+# V7.1 defaults are intentionally conservative. The purpose of the challenger is
+# to prove that less churn can beat the legacy grid after costs, not to maximize
+# the number of trades.
 DEFAULTS = {
     "start_capital": 1000.0,
     "fee_pct": 0.25,
-    # Slippage is not charged in the legacy V6 baseline, but is included in the
-    # entry hurdle so the challenger must have enough expected room to cover it.
     "slippage_pct": 0.10,
     "safety_buffer_pct": 0.35,
+    "fee_multiple": 3.0,
     "confirm_hours": 2,
-    "min_hours_between_rebalances": 3,
-    "min_price_move_pct": 0.70,
+    "min_hours_between_rebalances": 4,
+    "min_price_move_pct": 0.80,
+    "max_price_move_pct": 1.50,
+    "volatility_multiplier": 1.80,
+    "max_exposure_pct": 60.0,
+    "bear_max_exposure_pct": 40.0,
 }
 
 
@@ -46,6 +52,20 @@ def _write_json(path: Path, payload: Any) -> None:
     tmp.replace(path)
 
 
+
+
+def _archive_previous_season() -> None:
+    """Archive a prior fee-grid season before a clean restart."""
+    if not any(path.exists() for path in (STATE_FILE, HISTORY_FILE, LATEST_FILE)):
+        return
+    stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%SZ")
+    archive = DATA_DIR / "fee_grid_archive" / stamp
+    archive.mkdir(parents=True, exist_ok=True)
+    for path in (STATE_FILE, HISTORY_FILE, LATEST_FILE):
+        if path.exists():
+            path.replace(archive / path.name)
+
+
 def state() -> dict[str, Any] | None:
     x = _read_json(STATE_FILE, None)
     return x if isinstance(x, dict) else None
@@ -60,9 +80,10 @@ def start_fee_grid(start_capital: float = 1000.0, fee_pct: float = 0.25, **param
         raise ValueError("Startkapital muss > 0 sein.")
     if cfg["fee_pct"] < 0:
         raise ValueError("Gebühr darf nicht negativ sein.")
+    _archive_previous_season()
     now = pd.Timestamp.now(tz="UTC").floor("h")
     payload = {
-        "version": "6.10",
+        "version": "7.1",
         "mode": "FEE_AWARE_GRID_SHADOW",
         "active": True,
         "started_at": now.isoformat(),
@@ -93,6 +114,45 @@ def resume_fee_grid() -> dict[str, Any]:
     return s
 
 
+def _dynamic_grid_step_pct(close: pd.Series, cfg: dict[str, Any]) -> pd.Series:
+    """Return a volatility-aware minimum course move in percent.
+
+    The 24h rolling hourly-return volatility is scaled and clamped to the user
+    controlled corridor (default 0.80% .. 1.50%).
+    """
+    floor = max(0.0, float(cfg.get("min_price_move_pct", 0.80)))
+    ceiling = max(floor, float(cfg.get("max_price_move_pct", 1.50)))
+    mult = max(0.0, float(cfg.get("volatility_multiplier", 1.80)))
+    hourly_vol_pct = close.pct_change().rolling(24, min_periods=8).std(ddof=0) * 100.0
+    dynamic = (hourly_vol_pct * mult).clip(lower=floor, upper=ceiling)
+    return dynamic.fillna(floor)
+
+
+def _regime_at(price: float, slow_ema: float | np.floating | None, mom7: float | np.floating | None) -> str:
+    if slow_ema is None or mom7 is None or pd.isna(slow_ema) or pd.isna(mom7):
+        return "neutral"
+    if price < float(slow_ema) and float(mom7) < 0.0:
+        return "bear"
+    if price > float(slow_ema) and float(mom7) > 0.0:
+        return "bull"
+    return "neutral"
+
+
+def _fee_hurdle_pct(fee_pct: float, cfg: dict[str, Any]) -> float:
+    """Gross mean-reversion edge required before increasing exposure.
+
+    Requirement A: at least `fee_multiple` times the pure round-trip fee.
+    Requirement B: at least estimated round-trip fee + slippage + safety buffer.
+    We use the stricter of both.
+    """
+    slippage = max(0.0, float(cfg.get("slippage_pct", 0.10)))
+    buffer_pct = max(0.0, float(cfg.get("safety_buffer_pct", 0.35)))
+    fee_multiple = max(1.0, float(cfg.get("fee_multiple", 3.0)))
+    pure_fee_hurdle = 2.0 * fee_pct * fee_multiple
+    all_in_hurdle = 2.0 * fee_pct + 2.0 * slippage + buffer_pct
+    return max(pure_fee_hurdle, all_in_hurdle)
+
+
 def _fee_aware_run(
     asset: str,
     bundle: dict[str, pd.DataFrame],
@@ -101,13 +161,7 @@ def _fee_aware_run(
     fee_rate: float,
     cfg: dict[str, Any],
 ) -> dict[str, Any]:
-    """Same adaptive-grid idea as V6, but with explicit anti-churn gates.
-
-    The challenger keeps the original z-score target ladder. It only increases
-    exposure when the distance back to the 72h EMA exceeds an estimated
-    round-trip cost hurdle, requires the target for multiple completed hours,
-    and blocks small/rapid rebalances. Risk-off exits always remain allowed.
-    """
+    """Adaptive grid with anti-churn, fee hurdle and bear-market exposure brake."""
     now = pd.Timestamp.now(tz="UTC")
     df = _complete_hourly(bundle[asset], now)
     if df.empty:
@@ -119,6 +173,7 @@ def _fee_aware_run(
     z = (close - ema) / std
     slow_ema = close.ewm(span=480, adjust=False).mean()
     mom7 = close.pct_change(24 * 7)
+    dynamic_step = _dynamic_grid_step_pct(close, cfg)
 
     pf = Portfolio(initial, fee_rate)
     eq_points: list[tuple[pd.Timestamp, float]] = []
@@ -131,16 +186,16 @@ def _fee_aware_run(
     blocked_cost = 0
     blocked_time = 0
     blocked_move = 0
+    blocked_exposure = 0
     rebalances = 0
+    bear_hours = 0
 
-    hurdle_pct = (
-        2.0 * float(cfg.get("fee_pct", fee_rate * 100.0))
-        + 2.0 * float(cfg.get("slippage_pct", 0.10))
-        + float(cfg.get("safety_buffer_pct", 0.35))
-    )
+    fee_pct = float(cfg.get("fee_pct", fee_rate * 100.0))
+    hurdle_pct = _fee_hurdle_pct(fee_pct, cfg)
     confirm_hours = max(1, int(cfg.get("confirm_hours", 2)))
-    min_hours = max(0.0, float(cfg.get("min_hours_between_rebalances", 3)))
-    min_move = max(0.0, float(cfg.get("min_price_move_pct", 0.70)))
+    min_hours = max(0.0, float(cfg.get("min_hours_between_rebalances", 4)))
+    max_exposure = min(1.0, max(0.0, float(cfg.get("max_exposure_pct", 60.0)) / 100.0))
+    bear_max_exposure = min(max_exposure, max(0.0, float(cfg.get("bear_max_exposure_pct", 40.0)) / 100.0))
 
     for ts, price_raw in close.items():
         if ts < start.floor("h"):
@@ -150,12 +205,23 @@ def _fee_aware_run(
         other = "ETH" if asset == "BTC" else "BTC"
         prices = {asset: price, other: 1.0}
         zv = z.loc[ts]
-        risk_off = bool(
-            pd.notna(slow_ema.loc[ts]) and pd.notna(mom7.loc[ts])
-            and price < slow_ema.loc[ts]
-            and mom7.loc[ts] < -0.08
+        mom7_v = mom7.loc[ts]
+        slow_v = slow_ema.loc[ts]
+        regime = _regime_at(price, slow_v, mom7_v)
+        bear_hours += int(regime == "bear")
+
+        severe_risk_off = bool(
+            pd.notna(slow_v) and pd.notna(mom7_v)
+            and price < float(slow_v)
+            and float(mom7_v) < -0.08
         )
-        raw_target = _grid_targets(float(zv) if pd.notna(zv) else np.nan, risk_off)
+        raw_target = _grid_targets(float(zv) if pd.notna(zv) else np.nan, severe_risk_off)
+
+        cap = bear_max_exposure if regime == "bear" else max_exposure
+        capped_target = min(float(raw_target), cap)
+        if capped_target < float(raw_target) - 1e-12:
+            blocked_exposure += 1
+        raw_target = capped_target
 
         if desired_target == raw_target:
             desired_streak += 1
@@ -163,36 +229,33 @@ def _fee_aware_run(
             desired_target = raw_target
             desired_streak = 1
 
-        should_rebalance = abs(raw_target - current_target) >= 0.24
+        should_rebalance = abs(raw_target - current_target) >= 0.19
         if should_rebalance:
             allow = True
-            reason_bits = []
 
-            # Emergency / broad risk-off de-risking is never delayed.
-            emergency_exit = bool(risk_off and raw_target == 0.0 and current_target > 0.0)
+            # Strong risk-off liquidation is always immediate.
+            emergency_exit = bool(severe_risk_off and raw_target == 0.0 and current_target > 0.0)
 
             if not emergency_exit:
                 if desired_streak < confirm_hours:
                     allow = False
                     blocked_time += 1
-                    reason_bits.append(f"Bestätigung {desired_streak}/{confirm_hours}")
 
                 if last_rebalance_ts is not None:
                     hours_since = (ts - last_rebalance_ts).total_seconds() / 3600.0
                     if hours_since < min_hours:
                         allow = False
                         blocked_time += 1
-                        reason_bits.append(f"Cooldown {hours_since:.1f}/{min_hours:.0f}h")
 
+                required_move = float(dynamic_step.loc[ts])
                 if last_rebalance_price is not None:
                     move_pct = abs(price / last_rebalance_price - 1.0) * 100.0
-                    if move_pct < min_move:
+                    if move_pct < required_move:
                         allow = False
                         blocked_move += 1
-                        reason_bits.append(f"Kursweg {move_pct:.2f}%<{min_move:.2f}%")
 
-                # New/increased exposure must have enough room back to the EMA
-                # to cover two fees, two assumed slippage legs and a buffer.
+                # Only increases need a profit-room test. Reductions remain possible
+                # after confirmation/cooldown/move gates and risk-off can exit instantly.
                 if raw_target > current_target:
                     if pd.isna(ema.loc[ts]) or price <= 0:
                         edge_pct = 0.0
@@ -201,10 +264,13 @@ def _fee_aware_run(
                     if edge_pct < hurdle_pct:
                         allow = False
                         blocked_cost += 1
-                        reason_bits.append(f"Edge {edge_pct:.2f}%<{hurdle_pct:.2f}% Kostenhürde")
 
             if allow:
-                why = f"FeeGrid z={float(zv):.2f} Ziel={raw_target:.0%} Hürde={hurdle_pct:.2f}%"
+                step_pct = float(dynamic_step.loc[ts])
+                why = (
+                    f"FeeGrid V7.1 z={float(zv):.2f} Ziel={raw_target:.0%} "
+                    f"Hürde={hurdle_pct:.2f}% Abstand={step_pct:.2f}% Regime={regime}"
+                )
                 pf.rebalance({asset: raw_target, other: 0.0}, prices, ts, why)
                 current_target = raw_target
                 last_rebalance_price = price
@@ -222,9 +288,13 @@ def _fee_aware_run(
     equity = pf.equity({asset: last_price, other: 1.0})
     pos_value = pf.qty[asset] * last_price
     alloc = pos_value / equity if equity > 0 else 0.0
+    last_ts = curve.index[-1]
+    last_regime = _regime_at(float(last_price), slow_ema.loc[last_ts], mom7.loc[last_ts])
+    last_step = float(dynamic_step.loc[last_ts])
+
     return {
         "status": "läuft",
-        "name": f"{asset} Fee-Aware Grid",
+        "name": f"{asset} Fee-Aware Grid V7.1",
         "curve": curve,
         "trades": pf.trades,
         "fees": pf.fees_paid,
@@ -235,7 +305,11 @@ def _fee_aware_run(
         "blocked_cost": blocked_cost,
         "blocked_time": blocked_time,
         "blocked_move": blocked_move,
+        "blocked_exposure": blocked_exposure,
+        "bear_hours": bear_hours,
         "hurdle_pct": hurdle_pct,
+        "dynamic_step_pct": last_step,
+        "regime": last_regime,
         **m,
     }
 
@@ -261,6 +335,10 @@ def _serialize_result(asset: str, variant: str, r: dict[str, Any], baseline: dic
         "Position": r.get("position", ""),
         "Rebalances": int(r.get("rebalances", 0) or 0),
         "Kosten-Blocker": int(r.get("blocked_cost", 0) or 0),
+        "Abstands-Blocker": int(r.get("blocked_move", 0) or 0),
+        "Exposure-Blocker": int(r.get("blocked_exposure", 0) or 0),
+        "Dyn. Abstand %": round(float(r.get("dynamic_step_pct", 0) or 0), 2) if variant != "Standard Grid" else None,
+        "Regime": r.get("regime", "") if variant != "Standard Grid" else "",
     }
 
 
@@ -280,13 +358,12 @@ def process_fee_grid() -> dict[str, Any]:
     bundle = load_v6_bundle(start, warmup_days=75)
 
     rows = []
-    curves = {}
     summary = {}
     for asset in ["BTC", "ETH"]:
         standard = run_grid(asset, bundle, start, initial, fee_rate)
         aware = _fee_aware_run(asset, bundle, start, initial, fee_rate, cfg)
         rows.append(_serialize_result(asset, "Standard Grid", standard))
-        rows.append(_serialize_result(asset, "Fee-Aware Grid", aware, standard))
+        rows.append(_serialize_result(asset, "Fee-Aware V7.1", aware, standard))
         summary[asset] = {
             "standard_end": float(standard.get("end", initial) or initial),
             "aware_end": float(aware.get("end", initial) or initial),
@@ -295,24 +372,35 @@ def process_fee_grid() -> dict[str, Any]:
             "net_advantage_eur": float(aware.get("end", initial) or initial) - float(standard.get("end", initial) or initial),
             "fees_saved_eur": float(standard.get("fees", 0) or 0) - float(aware.get("fees", 0) or 0),
             "hurdle_pct": float(aware.get("hurdle_pct", 0) or 0),
+            "dynamic_step_pct": float(aware.get("dynamic_step_pct", 0) or 0),
+            "regime": str(aware.get("regime", "")),
+            "blocked_cost": int(aware.get("blocked_cost", 0) or 0),
+            "blocked_move": int(aware.get("blocked_move", 0) or 0),
+            "blocked_exposure": int(aware.get("blocked_exposure", 0) or 0),
         }
-        if standard.get("status") == "läuft":
-            curves[f"{asset} Standard"] = standard.get("curve")
-        if aware.get("status") == "läuft":
-            curves[f"{asset} Fee-Aware"] = aware.get("curve")
 
     now = pd.Timestamp.now(tz="UTC").isoformat()
-    payload = {"ok": True, "active": True, "evaluated_at": now, "started_at": s["started_at"], "params": cfg, "rows": rows, "summary": summary}
+    payload = {
+        "ok": True,
+        "active": True,
+        "algorithm_version": "7.1",
+        "evaluated_at": now,
+        "started_at": s["started_at"],
+        "params": cfg,
+        "rows": rows,
+        "summary": summary,
+    }
     _write_json(LATEST_FILE, payload)
     s["last_update_at"] = now
     s["last_summary"] = summary
+    s["algorithm_version"] = "7.1"
     _write_json(STATE_FILE, s)
 
     hist_rows = []
     for row in rows:
         if row.get("Status") != "läuft":
             continue
-        hist_rows.append({"timestamp": now, **row})
+        hist_rows.append({"timestamp": now, "algorithm_version": "7.1", **row})
     if hist_rows:
         frame = pd.DataFrame(hist_rows)
         if HISTORY_FILE.exists():
@@ -328,7 +416,11 @@ def process_fee_grid() -> dict[str, Any]:
     msg_parts = []
     for asset in ["BTC", "ETH"]:
         x = summary.get(asset, {})
-        msg_parts.append(f"{asset}: Fee-Aware vs Standard {x.get('net_advantage_eur',0):+.2f} € · Gebühren gespart {x.get('fees_saved_eur',0):+.2f} €")
+        msg_parts.append(
+            f"{asset}: V7.1 vs Standard {x.get('net_advantage_eur',0):+.2f} € · "
+            f"Gebühren gespart {x.get('fees_saved_eur',0):+.2f} € · "
+            f"Abstand {x.get('dynamic_step_pct',0):.2f}%"
+        )
     return {"active": True, "message": " · ".join(msg_parts), "rows": rows, "summary": summary, "payload": payload}
 
 

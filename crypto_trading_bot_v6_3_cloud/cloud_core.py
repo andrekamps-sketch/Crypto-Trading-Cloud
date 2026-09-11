@@ -137,6 +137,8 @@ def evaluate_v6() -> dict[str, dict]:
                 "price": float(getattr(t, "price", 0.0)),
                 "fee": float(getattr(t, "fee", 0.0)),
                 "pnl_eur": float(getattr(t, "realized_pnl", 0.0)),
+                "gross_pnl_eur": float(getattr(t, "gross_pnl", 0.0)),
+                "basis_price": float(getattr(t, "basis_price", 0.0)),
                 "reason": str(getattr(t, "reason", "")),
             })
     trade_events.sort(key=lambda x: str(x.get("timestamp", "")))
@@ -204,12 +206,24 @@ def save_snapshot(df: pd.DataFrame) -> None:
     x.to_csv(CENTRAL_HISTORY, index=False)
 
 
+def _candlestick_table() -> pd.DataFrame:
+    try:
+        from candlestick_scanner import leaderboard_row
+        row = leaderboard_row()
+        return pd.DataFrame([row]) if row else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
 def evaluate_all() -> pd.DataFrame:
     frames = []
     if V52_STATE.exists():
         frames.append(v52_table(evaluate_v52()))
     if V6_STATE.exists():
         frames.append(v6_table(evaluate_v6()))
+    candle = _candlestick_table()
+    if not candle.empty:
+        frames.append(candle)
     frames = [f for f in frames if f is not None and not f.empty]
     if not frames:
         return pd.DataFrame()
@@ -256,8 +270,11 @@ def latest_combined() -> pd.DataFrame:
     frames = []
     a = v52_table()
     b = v6_table()
+    c = _candlestick_table()
     if not a.empty:
         frames.append(a)
     if not b.empty:
         frames.append(b)
+    if not c.empty:
+        frames.append(c)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()

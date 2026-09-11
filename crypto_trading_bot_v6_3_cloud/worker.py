@@ -13,10 +13,14 @@ from strategy_challenger import process_challenge
 from live_paper import process_live_paper, state as live_paper_state
 from live_paper_long_short import process_long_short_paper, state as long_short_state
 from fee_aware_grid import process_fee_grid, state as fee_grid_state
+from crypto_radar import scan_crypto_radar, build_new_alerts
+from candlestick_scanner import process_candlestick_paper, start_candlestick_paper, state as candlestick_state
 
 FULL_MINUTES = max(15, int(os.environ.get("AUTO_UPDATE_MINUTES", "60")))
 LIVE_MINUTES = max(5, int(os.environ.get("LIVE_PAPER_UPDATE_MINUTES", "5")))
 SCAN_MARKET = os.environ.get("AUTO_MARKET_SCAN", "1").strip().lower() not in {"0", "false", "no"}
+RADAR_ENABLED = os.environ.get("CRYPTO_RADAR_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+CANDLE_AUTO_START = os.environ.get("CANDLESTICK_AUTO_START", "1").strip().lower() not in {"0", "false", "no"}
 
 
 def status(**kwargs):
@@ -44,6 +48,17 @@ def full_cycle():
                 messages.append(f"Signal-Labor: {lab.get('total', 0)} Signale, +{lab.get('new_signals', 0)} neu")
         else:
             lab = process_signal_lab(monitor_payload) if monitor_payload else {"ok": False}
+
+        if RADAR_ENABLED:
+            radar = scan_crypto_radar()
+            messages.append(f"Crypto-Radar: {radar.get('liquid_universe', 0)} liquide Märkte · {radar.get('deep_scanned', 0)} tief geprüft")
+            radar_alerts = build_new_alerts(radar)
+            sent_radar = 0
+            for alert in radar_alerts:
+                ok, _ = send_telegram(alert)
+                sent_radar += 1 if ok else 0
+            if radar_alerts:
+                messages.append(f"Radar-Alarme: {sent_radar}/{len(radar_alerts)} gesendet")
 
         challenger = process_challenge(table, monitor_payload)
         if challenger.get("active"):
@@ -76,8 +91,16 @@ def full_cycle():
 def live_cycle():
     long_only = live_paper_state()
     long_short = long_short_state()
-    if not (long_only and long_only.get("active", True)) and not (long_short and long_short.get("active", True)):
-        status(live_paper_active=False, long_short_active=False,
+    candle = candlestick_state()
+    if candle is None and CANDLE_AUTO_START:
+        try:
+            candle = start_candlestick_paper(start_capital=1000.0)
+        except Exception:
+            candle = None
+    if (not (long_only and long_only.get("active", True))
+            and not (long_short and long_short.get("active", True))
+            and not (candle and candle.get("active", True))):
+        status(live_paper_active=False, long_short_active=False, candlestick_active=False,
                last_live_at=datetime.now().astimezone().isoformat(timespec="seconds"),
                live_message="Live-Paper-Systeme nicht aktiv")
         return
@@ -101,14 +124,24 @@ def live_cycle():
                 if txt:
                     ok, _ = send_telegram(txt)
                     sent += 1 if ok else 0
+        if candle and candle.get("active", True):
+            res_cs = process_candlestick_paper()
+            messages.append("Candlestick: " + str(res_cs.get("message", "aktualisiert")))
+            for event in res_cs.get("events", []) or []:
+                txt = str(event.get("telegram", "")).strip()
+                if txt:
+                    ok, _ = send_telegram(txt)
+                    sent += 1 if ok else 0
         msg = " · ".join(messages)
         status(ok=True, live_paper_active=bool(long_only and long_only.get("active", True)),
                long_short_active=bool(long_short and long_short.get("active", True)),
+               candlestick_active=bool(candle and candle.get("active", True)),
                last_live_at=datetime.now().astimezone().isoformat(timespec="seconds"),
                live_message=msg, live_telegram_sent=sent, message=msg)
     except Exception as exc:
         status(ok=False, live_paper_active=bool(long_only and long_only.get("active", True)),
                long_short_active=bool(long_short and long_short.get("active", True)),
+               candlestick_active=bool(candle and candle.get("active", True)),
                last_live_at=datetime.now().astimezone().isoformat(timespec="seconds"),
                live_message=str(exc), message=f"Live-Paper Fehler: {exc}")
 
